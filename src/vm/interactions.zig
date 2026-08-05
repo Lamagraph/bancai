@@ -38,7 +38,7 @@ fn evalCondition(c: *Core, lagent: *Agent, ragent: *Agent, instructions: []Condi
         switch (instr.tag) {
             .put_port => |port| {
                 const owner = if (port.owner == .lhs) lagent else ragent;
-                const value = if (port.idx) |idx| owner.ports[idx].? else Value{ .agent = owner };
+                const value = if (port.idx) |idx| owner.ports[idx] else Value{ .agent = owner };
                 const agent = agent: {
                     switch (value) {
                         .name => |name| {
@@ -66,7 +66,7 @@ fn evalCondition(c: *Core, lagent: *Agent, ragent: *Agent, instructions: []Condi
                 }
             },
             .get_special => {
-                registers[instr.result] = Condition.Register.CondValue{ .special = registers[instr.lhs].agent.ports[0].?.special };
+                registers[instr.result] = Condition.Register.CondValue{ .special = registers[instr.lhs].agent.ports[0].special };
             },
             .put_constant => |special| {
                 registers[instr.result] = Condition.Register.CondValue{ .special = special };

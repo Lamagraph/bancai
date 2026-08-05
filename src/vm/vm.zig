@@ -306,7 +306,7 @@ fn objToValueNumber(agent_heap: Memory.Heap(Agent), num: AST.Object) !Value {
     const agent_id = Builtin.BuiltinNameMap.get(Builtin.number_builtin_ident).?;
     const agent = try agent_heap.allocOne();
 
-    agent.* = .{ .id = agent_id, .ports = @splat(null) };
+    agent.* = .{ .id = agent_id };
     agent.ports[0] = Value{ .special = numtype };
 
     return .{ .agent = agent };
@@ -318,7 +318,7 @@ fn objToValueAgent(self: *Self, obj: AST.Object) anyerror!Value {
     const arity = try self.runtime.agent_arities.get(agent_id, portlist.len);
     const agent = try self.global_ctx.agent_heap.allocOne();
 
-    agent.* = .{ .id = agent_id, .ports = @splat(null) };
+    agent.* = .{ .id = agent_id };
     {
         var idx: u8 = 0;
         while (idx < arity) : (idx += 1) {

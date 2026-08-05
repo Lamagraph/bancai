@@ -5,11 +5,11 @@ const memory = @import("memory.zig");
 
 const number_of_ports = 10;
 
-pub const Ports = [number_of_ports]?Value;
+pub const Ports = [number_of_ports]Value;
 
 pub const Agent = struct {
     id: Id,
-    ports: Ports,
+    ports: Ports = undefined,
     pub const Id = u32;
     pub const Arity = u8;
 };
@@ -211,7 +211,7 @@ test "unchain" {
     const b = try name_heap.allocOne();
     const c = try name_heap.allocOne();
     const agent = try agent_heap.allocOne();
-    agent.* = .{ .id = 0, .ports = @splat(null) };
+    agent.* = .{ .id = 0 };
     a.port = .{ .name = b };
     b.port = .{ .name = c };
     c.port = .{ .agent = agent };

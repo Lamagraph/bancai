@@ -120,7 +120,7 @@ pub const Eraser = struct {
         // This unwrap may fail in case of (w, F(w)) net on "free w;"
         const ag_arity = c.runtime.agent_arities.arityOf(agent.id);
         for (0..ag_arity) |idx| {
-            const port = agent.ports[idx].?;
+            const port = agent.ports[idx];
             port_switch: switch (port) {
                 .name => |name| {
                     if (name.port) |name_port| {
@@ -170,7 +170,7 @@ const copying_duplicator = struct {
         const ag_copy = try ctx.c.createAgent(agent.id);
         const ag_arity = ctx.c.runtime.agent_arities.arityOf(agent.id);
         for (0..ag_arity) |idx| {
-            const port = agent.ports[idx].?;
+            const port = agent.ports[idx];
             switch (port) {
                 .name => |connected_name| {
                     const stored_ptr = ctx.names_map.getPtr(connected_name).?;
@@ -205,7 +205,7 @@ const copying_duplicator = struct {
     pub fn copyNames(ctx: *const CopyContext, agent: *Agent) !*Agent {
         const ag_arity = ctx.c.runtime.agent_arities.arityOf(agent.id);
         for (0..ag_arity) |idx| {
-            const port = agent.ports[idx].?;
+            const port = agent.ports[idx];
             port_switch: switch (port) {
                 .name => |connected_name| {
                     const traversed = connected_name.traverseFree(ctx.c.local_ctx.name_heap);
@@ -225,7 +225,7 @@ const copying_duplicator = struct {
                         } else {
                             try ctx.names_map.put(traversed, .{
                                 .outer = .{
-                                    .original_port = &agent.ports[idx].?,
+                                    .original_port = &agent.ports[idx],
                                     .dup_agent = try ctx.c.createAgent(ctx.duplicator_id),
                                 },
                             });
@@ -264,17 +264,17 @@ pub fn dupCopy(c: *Core, self: *Agent, ag: *Agent) BuiltinAgentError!void {
 
     _ = try copying_duplicator.copyNames(&ctx, ag);
 
-    if (self.ports[0].? == .name and self.ports[0].?.name.is_open()) {
-        self.ports[0].?.name.port = Value{ .agent = ag };
+    if (self.ports[0] == .name and self.ports[0].name.is_open()) {
+        self.ports[0].name.port = Value{ .agent = ag };
     } else {
         try c.local_ctx.pushUrgent(EquationUnnormalized{
-            .lhs = self.ports[0].?,
+            .lhs = self.ports[0],
             .rhs = Value{ .agent = ag },
         });
     }
 
     for (1..arity) |port_idx| {
-        const port = self.ports[port_idx].?;
+        const port = self.ports[port_idx];
         const copy = try copying_duplicator.makeCopy(&ctx, port_idx, ag);
         if (port == .name and port.name.is_open()) {
             port.name.port = Value{ .agent = copy };
@@ -309,8 +309,8 @@ pub fn tuple(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!void {
 
     for (0..arity) |port_idx| {
         const eq = EquationUnnormalized{
-            .lhs = self.ports[port_idx].?,
-            .rhs = other.ports[port_idx].?,
+            .lhs = self.ports[port_idx],
+            .rhs = other.ports[port_idx],
         };
 
         try c.local_ctx.pushEquation(eq);
@@ -326,7 +326,7 @@ pub fn number(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!void {
     if (other.id != adder_id and other.id != mult_id and other.id != div_id and other.id != sub_id)
         return BuiltinAgentError.NoRuleSpecified;
 
-    const self_special = self.ports[0].?.special;
+    const self_special = self.ports[0].special;
 
     const getSecondValue = struct {
         pub fn getSecondValue(val: Value, _c: *Core) ?Special {
@@ -336,22 +336,22 @@ pub fn number(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!void {
                         name.unchain(_c.local_ctx.name_heap);
                         _c.local_ctx.freeOneName(name);
                         defer _c.local_ctx.freeOneAgent(agent);
-                        return agent.ports[0].?.special;
+                        return agent.ports[0].special;
                     } else {
                         return null;
                     }
                 },
                 .agent => |agent| {
-                    return getSecondValue(agent.ports[0].?, _c);
+                    return getSecondValue(agent.ports[0], _c);
                 },
                 .special => |special| return special,
             }
         }
     }.getSecondValue;
 
-    const sv = getSecondValue(other.ports[1].?, c) orelse {
+    const sv = getSecondValue(other.ports[1], c) orelse {
         // We switch places: self with secondary argument port
-        const port = other.ports[1].?;
+        const port = other.ports[1];
         other.ports[1] = .{ .agent = self };
         const eq = EquationUnnormalized{
             .lhs = .{ .agent = other },
@@ -375,7 +375,7 @@ pub fn number(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!void {
     ret_ag.ports[0] = Value{ .special = ret };
 
     const eq = EquationUnnormalized{
-        .lhs = other.ports[0].?,
+        .lhs = other.ports[0],
         .rhs = .{ .agent = ret_ag },
     };
     try c.local_ctx.pushUrgent(eq);
@@ -385,7 +385,7 @@ pub fn make_random_list(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError
     const number_id = BuiltinNameMap.get(number_builtin_ident).?;
     if (other.id != number_id) return BuiltinAgentError.NoRuleSpecified;
 
-    const num_special = other.ports[0].?.special;
+    const num_special = other.ports[0].special;
     const num = switch (num_special) {
         .integer => |i| i,
         .float => return BuiltinAgentError.BadSecondaryArgument,
@@ -424,7 +424,7 @@ pub fn make_random_list(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError
     }
 
     const eq = EquationUnnormalized{
-        .lhs = self.ports[0].?,
+        .lhs = self.ports[0],
         .rhs = Value{ .agent = lst },
     };
     try c.local_ctx.pushEquation(eq);
