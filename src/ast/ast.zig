@@ -115,3 +115,10 @@ pub const Statement = union(enum) {
 pub const Program = struct {
     statements: []Node(Statement),
 };
+
+test {
+    _ = &.{
+        Lexer,
+        Parser,
+    };
+}

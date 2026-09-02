@@ -26,6 +26,10 @@ pub const Token = struct {
         keyword_use,
         keyword_free,
         keyword_otherwise,
+
+        // starting with '#'
+        special_number,
+
         numeric_literal,
 
         lparen,
@@ -61,7 +65,7 @@ pub const Token = struct {
 
         pub fn lexeme(tag: Tag) ?[]const u8 {
             return switch (tag) {
-                .identifier, .eof, .string_literal, .numeric_literal, .invalid => null,
+                .identifier, .eof, .string_literal, .numeric_literal, .invalid, .special_number => null,
                 .keyword_free => "free",
                 .keyword_const => "const",
                 .keyword_use => "use",
@@ -115,8 +119,16 @@ pub const Token = struct {
         .{ "use", .keyword_use },
     });
 
+    pub const specials = std.StaticStringMap(Tag).initComptime(.{
+        .{ "#num", .special_number },
+    });
+
     pub fn getKeyword(content: []const u8) ?Tag {
         return keywords.get(content);
+    }
+
+    pub fn getSpecial(content: []const u8) ?Tag {
+        return specials.get(content);
     }
 };
 
@@ -155,6 +167,8 @@ pub const Tokenizer = struct {
         decimal,
 
         identifier,
+        special,
+
         state,
         eq,
         less,
@@ -201,6 +215,9 @@ pub const Tokenizer = struct {
                 'a'...'z', 'A'...'Z', '_' => {
                     result.tag = .identifier;
                     continue :state .identifier;
+                },
+                '#' => {
+                    continue :state .special;
                 },
                 '0'...'9' => {
                     result.tag = .numeric_literal;
@@ -349,6 +366,20 @@ pub const Tokenizer = struct {
                     },
                 }
             },
+            .special => {
+                self.advance();
+                switch (self.buffer[self.index]) {
+                    'a'...'z' => continue :state .special,
+                    else => {
+                        const content = self.buffer[result.loc.start.index..self.index];
+                        if (Token.getSpecial(content)) |tag| {
+                            result.tag = tag;
+                        } else {
+                            result.tag = .invalid;
+                        }
+                    },
+                }
+            },
             .string_literal => {
                 self.advance();
                 // Add real string handling?
@@ -475,6 +506,10 @@ test "single active pair program" {
         \\  r ~ S(w),
         \\  Add(w, x) ~ y;
     , &.{ .identifier, .lparen, .identifier, .comma, .identifier, .rparen, .rule_symbol, .identifier, .lparen, .identifier, .rparen, .fatrightarrow, .identifier, .tilde, .identifier, .lparen, .identifier, .rparen, .comma, .identifier, .lparen, .identifier, .comma, .identifier, .rparen, .tilde, .identifier, .semicolon });
+}
+
+test "specials" {
+    try testTokenize("#number #num #asd asd", &.{ .invalid, .special_number, .invalid, .identifier });
 }
 
 test "identifier contents" {
