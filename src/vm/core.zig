@@ -100,6 +100,12 @@ pub const LocalCtx = struct {
     pub inline fn pushUrgent(self: *LocalCtx, eq: EquationUnnormalized) !void {
         try Normalize.pushUrgentEquation(self.name_heap, self.equation_fetcher, eq);
     }
+
+    /// This function will always be called in the context of two agents interacting.
+    /// Hence, normalization is unnecessary.
+    pub inline fn pushLazy(self: *LocalCtx, eq: Equation) !void {
+        try self.equation_fetcher.pushLazy(eq);
+    }
 };
 
 pub fn createEmptyName(c: *Core) !*Name {

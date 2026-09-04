@@ -92,18 +92,18 @@ pub const GlobalCtx = struct {
     }
 
     fn equationFetcherInit(gpa: std.mem.Allocator) !EquationFetcher {
-        const FetcherType = EquationFetcher.TwoDequeEquationFetcher;
-        const two_deque_equation_fetcher = try gpa.create(FetcherType);
-        two_deque_equation_fetcher.* = .init(gpa);
+        const FetcherType = EquationFetcher.ThreeDequeEquationFetcher;
+        const three_deque_equation_fetcher = try gpa.create(FetcherType);
+        three_deque_equation_fetcher.* = .init(gpa);
 
-        return two_deque_equation_fetcher.equationFetcher();
+        return three_deque_equation_fetcher.equationFetcher();
     }
 
     fn equationFetcherDeinit(equation_fetcher: EquationFetcher, gpa: std.mem.Allocator) void {
-        const FetcherType = EquationFetcher.TwoDequeEquationFetcher;
-        const two_deque_equation_fetcher: *FetcherType = @ptrCast(@alignCast(equation_fetcher.ptr));
-        two_deque_equation_fetcher.deinit();
-        gpa.destroy(two_deque_equation_fetcher);
+        const FetcherType = EquationFetcher.ThreeDequeEquationFetcher;
+        const three_deque_equation_fetcher: *FetcherType = @ptrCast(@alignCast(equation_fetcher.ptr));
+        three_deque_equation_fetcher.deinit();
+        gpa.destroy(three_deque_equation_fetcher);
     }
 
     fn getHeapUser(comptime T: type, heap: Memory.Heap(T), gpa: std.mem.Allocator) Memory.Heap(T) {
@@ -120,7 +120,7 @@ pub const GlobalCtx = struct {
 
     fn getFetcherUser(fetcher: EquationFetcher, gpa: std.mem.Allocator) EquationFetcher {
         _ = gpa;
-        const Concrete = EquationFetcher.TwoDequeEquationFetcher;
+        const Concrete = EquationFetcher.ThreeDequeEquationFetcher;
         if (@hasDecl(Concrete, getUser)) {
             const concrete: *Concrete = @ptrCast(@alignCast(fetcher.ptr));
             return concrete.getUser();

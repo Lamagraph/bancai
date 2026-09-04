@@ -14,6 +14,7 @@ pub const VTable = struct {
     fetch: *const fn (*anyopaque) ?Equation,
     push: *const fn (*anyopaque, Equation) Error!void,
     pushUrgent: *const fn (*anyopaque, Equation) Error!void,
+    pushLazy: *const fn (*anyopaque, Equation) Error!void,
 };
 
 pub inline fn fetch(self: EquationFetcher) ?Equation {
@@ -27,6 +28,9 @@ pub inline fn push(self: EquationFetcher, eq: Equation) Error!void {
 pub inline fn pushUrgent(self: EquationFetcher, eq: Equation) Error!void {
     return self.vtable.pushUrgent(self.ptr, eq);
 }
+pub inline fn pushLazy(self: EquationFetcher, eq: Equation) Error!void {
+    return self.vtable.pushLazy(self.ptr, eq);
+}
 
 pub const LockedEquationFetcher = struct {
     const Self = @This();
@@ -38,6 +42,7 @@ pub const LockedEquationFetcher = struct {
         .fetch = Self.fetch,
         .push = Self.push,
         .pushUrgent = Self.pushUrgent,
+        .pushLazy = Self.pushLazy,
     };
 
     pub fn init(inner: EquationFetcher) Self {
@@ -84,21 +89,32 @@ pub const LockedEquationFetcher = struct {
 
         return self.inner.pushUrgent(eq);
     }
+
+    fn pushLazy(ctx: *anyopaque, eq: Equation) Error!void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        self.lock();
+        defer self.mutex.unlock();
+
+        return self.inner.pushLazy(eq);
+    }
 };
 
 /// Works like a queue. Single-threaded only on its own - see
 /// LockedEquationFetcher for sharing one across cores.
-pub const TwoDequeEquationFetcher = struct {
+pub const ThreeDequeEquationFetcher = struct {
     const Self = @This();
 
     equation_deque: std.Deque(Equation),
     urgent_deque: std.Deque(Equation),
+    lazy_deque: std.Deque(Equation),
     gpa: std.mem.Allocator,
 
     const vtable: VTable = .{
         .fetch = Self.fetch,
         .push = Self.push,
         .pushUrgent = Self.pushUrgent,
+        .pushLazy = Self.pushLazy,
     };
 
     pub fn equationFetcher(self: *Self) EquationFetcher {
@@ -108,7 +124,7 @@ pub const TwoDequeEquationFetcher = struct {
     pub fn fetch(ctx: *anyopaque) ?Equation {
         const self: *Self = @ptrCast(@alignCast(ctx));
 
-        return self.urgent_deque.popFront() orelse self.equation_deque.popFront();
+        return self.urgent_deque.popFront() orelse self.equation_deque.popFront() orelse self.lazy_deque.popFront();
     }
 
     pub fn push(ctx: *anyopaque, eq: Equation) Error!void {
@@ -123,26 +139,34 @@ pub const TwoDequeEquationFetcher = struct {
         try self.urgent_deque.pushBack(self.gpa, eq);
     }
 
+    pub fn pushLazy(ctx: *anyopaque, eq: Equation) Error!void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+
+        try self.lazy_deque.pushBack(self.gpa, eq);
+    }
+
     pub fn init(gpa: std.mem.Allocator) Self {
         return .{
             .equation_deque = .empty,
             .urgent_deque = .empty,
+            .lazy_deque = .empty,
             .gpa = gpa,
         };
     }
     pub fn deinit(self: *Self) void {
         self.equation_deque.deinit(self.gpa);
         self.urgent_deque.deinit(self.gpa);
+        self.lazy_deque.deinit(self.gpa);
     }
 };
 
 test "LockedEquationFetcher: wraps push/pushUrgent/fetch through to the inner fetcher" {
     const gpa = std.testing.allocator;
 
-    var two_deque = TwoDequeEquationFetcher.init(gpa);
-    defer two_deque.deinit();
+    var three_deque = ThreeDequeEquationFetcher.init(gpa);
+    defer three_deque.deinit();
 
-    var locked = LockedEquationFetcher.init(two_deque.equationFetcher());
+    var locked = LockedEquationFetcher.init(three_deque.equationFetcher());
     const fetcher = locked.equationFetcher();
 
     try std.testing.expect(fetcher.fetch() == null);
@@ -168,10 +192,10 @@ test "LockedEquationFetcher: wraps push/pushUrgent/fetch through to the inner fe
 test "LockedEquationFetcher: getUser hands back a working copy of the fetcher" {
     const gpa = std.testing.allocator;
 
-    var two_deque = TwoDequeEquationFetcher.init(gpa);
-    defer two_deque.deinit();
+    var three_deque = ThreeDequeEquationFetcher.init(gpa);
+    defer three_deque.deinit();
 
-    var locked = LockedEquationFetcher.init(two_deque.equationFetcher());
+    var locked = LockedEquationFetcher.init(three_deque.equationFetcher());
 
     const fetcher = locked.getUser();
     try std.testing.expect(fetcher.fetch() == null);

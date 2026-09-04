@@ -28,8 +28,9 @@ const SimpleValue = union(enum) {
 };
 
 const EvaluationError = error{
-    BadSecondaryValue,
-    WrongArgument,
+    /// The needed net hasn't been evaluated yet. We can wait until there is an agent on that port.
+    EmptyName,
+    WrongType,
 };
 
 fn evalCondition(c: *Core, lagent: *Agent, ragent: *Agent, instructions: []Condition.Instruction) !bool {
@@ -42,12 +43,12 @@ fn evalCondition(c: *Core, lagent: *Agent, ragent: *Agent, instructions: []Condi
                 const agent = agent: {
                     switch (value) {
                         .name => |name| {
-                            const traversed = name.traverseFree(c.local_ctx.name_heap);
-                            if (traversed.port) |traversed_port| {
-                                break :agent traversed_port.agent;
+                            const traversed = name.unwind();
+                            if (traversed) |agent| {
+                                break :agent agent;
                             } else {
                                 std.debug.print("No value on name\n", .{});
-                                return EvaluationError.BadSecondaryValue;
+                                return EvaluationError.EmptyName;
                             }
                         },
                         .agent => |agent| break :agent agent,
@@ -61,7 +62,7 @@ fn evalCondition(c: *Core, lagent: *Agent, ragent: *Agent, instructions: []Condi
                 if (registers[instr.lhs] == .agent) {
                     const agent = registers[instr.lhs].agent;
                     if (agent.id != asserted_id) {
-                        return error.BadSecondaryValue;
+                        return false;
                     }
                 }
             },
@@ -81,16 +82,16 @@ fn evalCondition(c: *Core, lagent: *Agent, ragent: *Agent, instructions: []Condi
                         .leq => lhs.special.leq(rhs.special),
                         .less => lhs.special.less(rhs.special),
                         .greater => lhs.special.greater(rhs.special),
-                        else => return error.WrongArgument,
+                        else => return error.WrongType,
                     } };
                 } else if (lhs == .bool and rhs == .bool) {
                     registers[instr.result] = .{ .bool = switch (op) {
                         .logic_and => lhs.bool and rhs.bool,
                         .logic_or => lhs.bool and rhs.bool,
-                        else => return error.WrongArgument,
+                        else => return error.WrongType,
                     } };
                 } else {
-                    return error.WrongArgument;
+                    return error.WrongType;
                 }
             },
             .apply_un => unreachable,
@@ -165,33 +166,35 @@ pub fn evalEquation(c: *Core, eq: Equation) !void {
             // We don't free the ragent in case it's wildcarded
             // because it functions like a name and will interact
             // later
-            defer c.local_ctx.agent_heap.freeOne(lagent);
-            defer if (!wildcarded) c.local_ctx.agent_heap.freeOne(ragent);
-
             const conditioned_rules = search_result.rules;
             for (conditioned_rules) |conditioned| {
                 if (conditioned.condition) |condition| {
-                    const evaluated = evalCondition(c, lagent, ragent, condition) catch |err| errblk: {
+                    const evaluated = evalCondition(c, lagent, ragent, condition) catch |err| {
                         if (Config.debug_printing.print_interactions)
                             std.debug.print("Caught an error {s}!\n", .{@errorName(err)});
 
                         switch (err) {
-                            EvaluationError.BadSecondaryValue => break :errblk false,
-                            // There probably should be some other error handling in case of bad arguments
-                            // but since many things can go badly, we can simply ignore it?
-                            // TODO: research into more constraining conditions
-                            EvaluationError.WrongArgument => break :errblk false,
+                            EvaluationError.WrongType => return err,
+                            EvaluationError.EmptyName => {
+                                try c.local_ctx.pushLazy(eq);
+                                return;
+                            },
                         }
                     };
                     if (evaluated) {
                         try Core.execInstructions(c, conditioned.instructions, lagent, ragent, wildcarded);
+                        c.local_ctx.agent_heap.freeOne(lagent);
+                        if (!wildcarded) c.local_ctx.agent_heap.freeOne(ragent);
                         return;
                     }
                 } else {
                     try Core.execInstructions(c, conditioned.instructions, lagent, ragent, wildcarded);
+                    c.local_ctx.agent_heap.freeOne(lagent);
+                    if (!wildcarded) c.local_ctx.agent_heap.freeOne(ragent);
                     return;
                 }
             }
+            return error.NoSuchRule;
         },
         .swap => {
             std.mem.swap(*Agent, &lagent, &ragent);
