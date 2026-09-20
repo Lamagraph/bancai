@@ -15,6 +15,8 @@ pub const AgentCount = struct {
     }
 };
 
+const Agent = Types.Agent;
+
 pub fn Heap(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -302,7 +304,12 @@ pub fn ObjPool(comptime T: type) type {
             const self: *Self = @ptrCast(@alignCast(ctx));
             //we use this pointer as a pointer to Optional
             const new_ptr: *Optional = @ptrCast(@alignCast(elem));
-
+            if (T == Agent) {
+                elem.rc -= 1;
+                if (elem.rc != 0) {
+                    return;
+                }
+            }
             new_ptr.ptr = self.free_list;
             self.free_list = new_ptr;
             self.free_count += 1;
