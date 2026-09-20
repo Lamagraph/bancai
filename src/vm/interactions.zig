@@ -42,9 +42,9 @@ fn evalCondition(c: *Core, lagent: *Agent, ragent: *Agent, instructions: []Condi
                 const agent = agent: {
                     switch (value) {
                         .name => |name| {
-                            const traversed = name.traverseFree(c.local_ctx.name_heap);
-                            if (traversed.port) |traversed_port| {
-                                break :agent traversed_port.agent;
+                            const traversed = name.unwind();
+                            if (traversed) |agent| {
+                                break :agent agent;
                             } else {
                                 std.debug.print("No value on name\n", .{});
                                 return EvaluationError.BadSecondaryValue;
@@ -61,7 +61,7 @@ fn evalCondition(c: *Core, lagent: *Agent, ragent: *Agent, instructions: []Condi
                 if (registers[instr.lhs] == .agent) {
                     const agent = registers[instr.lhs].agent;
                     if (agent.id != asserted_id) {
-                        return error.BadSecondaryValue;
+                        return false;
                     }
                 }
             },
@@ -109,10 +109,18 @@ fn evalCondition(c: *Core, lagent: *Agent, ragent: *Agent, instructions: []Condi
 /// ports are looked at by two agents (the original and the copy).
 /// If the original has an empty port, then it is a nested pattern matching
 /// problem.
-fn cow(c: *Core, agent: *Agent) !*Agent {
+fn cow(c: *Core, agent: *Agent) !?*Agent {
     std.debug.assert(agent.rc > 1);
+    const number_id = comptime Builtin.BuiltinNameMap.get(Builtin.number_builtin_ident).?;
     agent.rc -= 1;
     const arity = c.runtime.agent_arities.arityOf(agent.id);
+    if (agent.id != number_id) {
+        // Checking, whether we have a nested pattern matching problem.
+        for (0..arity) |port_idx| {
+            if (agent.ports[port_idx].?.getAgent() == null) return null;
+        }
+    }
+
     const new_me = try c.createAgent(agent.id);
 
     for (0..arity) |port_idx| {
@@ -132,12 +140,18 @@ fn cow(c: *Core, agent: *Agent) !*Agent {
 
 pub fn evalEquation(c: *Core, eq: Equation) !void {
     var lagent = eq.lhs;
-    if (lagent.rc > 1) {
-        lagent = try cow(c, lagent);
-    }
     var ragent = eq.rhs;
+    if (lagent.rc > 1) {
+        lagent = try cow(c, lagent) orelse {
+            try c.local_ctx.pushLazy(.{ .lhs = lagent, .rhs = ragent });
+            return;
+        };
+    }
     if (ragent.rc > 1) {
-        ragent = try cow(c, ragent);
+        ragent = try cow(c, ragent) orelse {
+            try c.local_ctx.pushLazy(.{ .lhs = lagent, .rhs = ragent });
+            return;
+        };
     }
 
     // TODO (KoGora): perf analysis
@@ -196,30 +210,34 @@ pub fn evalEquation(c: *Core, eq: Equation) !void {
             // We don't free the ragent in case it's wildcarded
             // because it functions like a name and will interact
             // later
-            defer c.local_ctx.agent_heap.freeOne(lagent);
-            defer if (!wildcarded) c.local_ctx.agent_heap.freeOne(ragent);
 
             const conditioned_rules = search_result.rules;
             for (conditioned_rules) |conditioned| {
                 if (conditioned.condition) |condition| {
-                    const evaluated = evalCondition(c, lagent, ragent, condition) catch |err| errblk: {
+                    const evaluated = evalCondition(c, lagent, ragent, condition) catch |err| {
                         if (Config.debug_printing.print_interactions)
                             std.debug.print("Caught an error {s}!\n", .{@errorName(err)});
 
-                        switch (err) {
-                            EvaluationError.BadSecondaryValue => break :errblk false,
-                            // There probably should be some other error handling in case of bad arguments
-                            // but since many things can go badly, we can simply ignore it?
-                            // TODO: research into more constraining conditions
-                            EvaluationError.WrongArgument => break :errblk false,
-                        }
+                        try c.local_ctx.pushLazy(.{ .lhs = lagent, .rhs = ragent });
+                        return;
+                        // switch (err) {
+                        //     EvaluationError.BadSecondaryValue => break :errblk false,
+                        //     // There probably should be some other error handling in case of bad arguments
+                        //     // but since many things can go badly, we can simply ignore it?
+                        //     // TODO: research into more constraining conditions
+                        //     EvaluationError.WrongArgument => break :errblk false,
+                        // }
                     };
                     if (evaluated) {
                         try Core.execInstructions(c, conditioned.instructions, lagent, ragent, wildcarded);
+                        c.local_ctx.agent_heap.freeOne(lagent);
+                        if (!wildcarded) c.local_ctx.agent_heap.freeOne(ragent);
                         return;
                     }
                 } else {
                     try Core.execInstructions(c, conditioned.instructions, lagent, ragent, wildcarded);
+                    c.local_ctx.agent_heap.freeOne(lagent);
+                    if (!wildcarded) c.local_ctx.agent_heap.freeOne(ragent);
                     return;
                 }
             }
