@@ -66,10 +66,10 @@ pub const builtin_agents = [_]BuiltinAgent{
     .{ .name = "Eraser", .arity = 0, .impl = eraser },
 
     // Dups
-    .{ .name = "Dup", .arity = 2, .impl = dupCopy },
-    .{ .name = "Dup2", .arity = 2, .impl = dupCopy },
-    .{ .name = "Dup3", .arity = 3, .impl = dupCopy },
-    .{ .name = "Dup4", .arity = 4, .impl = dupCopy },
+    .{ .name = "Dup", .arity = 2, .impl = dupReference },
+    .{ .name = "Dup2", .arity = 2, .impl = dupReference },
+    .{ .name = "Dup3", .arity = 3, .impl = dupReference },
+    .{ .name = "Dup4", .arity = 4, .impl = dupReference },
 
     // Tuples
     .{ .name = "Tuple0", .arity = 0, .impl = tuple },
@@ -116,6 +116,10 @@ pub const Eraser = struct {
     }
 
     pub fn erase(c: *Core, agent: *Agent) !void {
+        if (agent.rc > 1) {
+            agent.rc -= 1;
+            return;
+        }
         defer c.local_ctx.freeOneAgent(agent);
         // This unwrap may fail in case of (w, F(w)) net on "free w;"
         const ag_arity = c.runtime.agent_arities.arityOf(agent.id);
@@ -296,6 +300,19 @@ pub fn dupCopy(c: *Core, self: *Agent, ag: *Agent) BuiltinAgentError!void {
         outer.original_port.name = new_self_name;
         self_name.port = .{ .agent = outer.dup_agent };
         outer.dup_agent.ports[0] = .{ .name = new_self_name };
+    }
+}
+
+pub fn dupReference(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!void {
+    defer c.local_ctx.freeOneAgent(self);
+    const dup_arity = c.runtime.agent_arities.arityOf(self.id);
+    other.rc += dup_arity - 1;
+    for (0..dup_arity) |idx| {
+        const eq = EquationUnnormalized{
+            .lhs = self.ports[idx].?,
+            .rhs = .{ .agent = other },
+        };
+        try c.local_ctx.pushEquation(eq);
     }
 }
 

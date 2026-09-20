@@ -9,6 +9,7 @@ pub const Ports = [number_of_ports]?Value;
 
 pub const Agent = struct {
     id: Id,
+    rc: u32 = 1,
     ports: Ports,
     pub const Id = u32;
     pub const Arity = u8;

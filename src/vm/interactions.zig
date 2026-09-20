@@ -105,15 +105,46 @@ fn evalCondition(c: *Core, lagent: *Agent, ragent: *Agent, instructions: []Condi
     unreachable;
 }
 
+/// Copy on write. We copy the agent. After that, all its
+/// ports are looked at by two agents (the original and the copy).
+/// If the original has an empty port, then it is a nested pattern matching
+/// problem.
+fn cow(c: *Core, agent: *Agent) !*Agent {
+    std.debug.assert(agent.rc > 1);
+    agent.rc -= 1;
+    const arity = c.runtime.agent_arities.arityOf(agent.id);
+    const new_me = try c.createAgent(agent.id);
+
+    for (0..arity) |port_idx| {
+        if (agent.ports[port_idx].? == .special) {
+            new_me.ports[port_idx] = agent.ports[port_idx];
+            break;
+        }
+        const possible_agent = agent.ports[port_idx].?.getAgent();
+        std.debug.assert(possible_agent != null);
+        const port_agent = possible_agent.?;
+        port_agent.rc += 1;
+        new_me.ports[port_idx] = .{ .agent = port_agent };
+    }
+
+    return new_me;
+}
+
 pub fn evalEquation(c: *Core, eq: Equation) !void {
     var lagent = eq.lhs;
+    if (lagent.rc > 1) {
+        lagent = try cow(c, lagent);
+    }
     var ragent = eq.rhs;
+    if (ragent.rc > 1) {
+        ragent = try cow(c, ragent);
+    }
 
     // TODO (KoGora): perf analysis
     if (Config.debug_printing.print_interactions) {
         std.debug.print("{s} ~ {s}\n", .{
-            c.runtime.agent_id_map.findKey(lagent.id).?,
-            c.runtime.agent_id_map.findKey(ragent.id).?,
+            c.runtime.getAgentName(lagent.id).?,
+            c.runtime.getAgentName(ragent.id).?,
         });
     }
 
@@ -150,8 +181,8 @@ pub fn evalEquation(c: *Core, eq: Equation) !void {
             }
 
             std.debug.print("Unknown rule {s} - {s}\n", .{
-                c.runtime.agent_id_map.findKey(lagent.id).?,
-                c.runtime.agent_id_map.findKey(ragent.id).?,
+                c.runtime.getAgentName(lagent.id).?,
+                c.runtime.getAgentName(ragent.id).?,
             });
         }
 

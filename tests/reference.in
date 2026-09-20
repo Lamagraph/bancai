@@ -1,0 +1,19 @@
+
+Add(r, x) >< Z() =>
+    r ~ x;
+
+Add(r, x) >< S(y) =>
+   r ~ S(w),
+   Add(w, x) ~ y;
+
+x ~ S(S(S(Z())));
+x ~ Dup(x1, x2);
+
+
+Add(r1, S(Z())) ~ x1;
+Add(r2, S(S(S(Z())))) ~ x2;
+
+r1; r2;
+
+Add(r3, r1) ~ r2;
+r3;
