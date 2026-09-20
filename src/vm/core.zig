@@ -119,7 +119,7 @@ pub fn createEmptyName(c: *Core) !*Name {
 
 pub fn createAgent(c: *Core, id: Agent.Id) !*Agent {
     const ag = try c.local_ctx.allocOneAgent();
-    ag.id = id;
+    ag.* = .{ .id = id, .ports = undefined, .rc = 1 };
     return ag;
 }
 

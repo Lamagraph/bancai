@@ -4,12 +4,14 @@ const Config = @import("config");
 const Runtime = @import("runtime.zig");
 const Types = @import("types.zig");
 
+const Agent = Types.Agent;
+
 pub const HeapKind = enum { basic, objpool };
 
 pub const max_agent_structure_ids = 1024;
 
 pub const AgentCount = struct {
-    id: Types.Agent.Id,
+    id: Agent.Id,
     cnt: usize,
 
     pub fn lessThan(_: void, a: AgentCount, b: AgentCount) bool {
@@ -317,7 +319,12 @@ pub fn ObjPool(comptime T: type) type {
             const self: *Self = @ptrCast(@alignCast(ctx));
             //we use this pointer as a pointer to Optional
             const new_ptr: *Optional = @ptrCast(@alignCast(elem));
-
+            if (T == Agent) {
+                elem.rc -= 1;
+                if (elem.rc != 0) {
+                    return;
+                }
+            }
             new_ptr.ptr = self.free_list;
             self.free_list = new_ptr;
             self.free_count += 1;
