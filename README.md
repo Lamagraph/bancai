@@ -1,6 +1,6 @@
-# pinet
+# bancai
 
-Pinet is a (not yet) parallel interaction nets interpreter, inspired by [Inpla](https://github.com/inpla/inpla). The language is Inpla's dialect.
+Bancai is a (not yet) parallel interaction nets interpreter, inspired by [Inpla](https://github.com/inpla/inpla). The language is Inpla's dialect.
 
 Interaction nets is a computational model with some restrictions, that allow for trivial parallelism.
 
@@ -22,7 +22,7 @@ You can read a basic user manual at `docs/LANGUAGE.md`.
 
 ## Current state
 
-Pinet is in early development. Single-threaded evaluation of interaction nets, based on Inpla model, is fully implemented. Parallel execution is in active development.
+Bancai is in early development. Single-threaded evaluation of interaction nets, based on Inpla model, is fully implemented. Parallel execution is in active development.
 
 # Acknowledgement & Lineage
 
