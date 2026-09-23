@@ -1,0 +1,19 @@
+
+ListMap(r, f) >< [] =>
+    r ~ [],
+    Eraser() ~ f;
+
+ListMap(r, f) >< x:xs =>
+    Dup(f1, f2) ~ f,
+    f1 ~ (x', x),
+    r ~ x' : w,
+    ListMap(w, f2) ~ xs;
+
+F(r) >< x =>
+    Add (r, 1) ~ x;
+
+lst ~ [1, 2, 3];
+
+ListMap(r, (w, F(w))) ~ lst;
+
+r;
