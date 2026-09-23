@@ -1,6 +1,6 @@
-Pinet is an interaction nets interpreter, designed to be a playground for interaction nets implementation ideas. Pinet features an Inpla-like programming language. Users may define their own interaction rules and nets.
+Bancai is an interaction nets interpreter, designed to be a playground for interaction nets implementation ideas. Bancai features an Inpla-like programming language. Users may define their own interaction rules and nets.
 
-To follow along with the terminology, reading articles on Ives Lafont's interaction nets is advised. For basic introduction to pinet-specific implementation of interaction nets, skip ahead to the **Core ideas** section down below.
+To follow along with the terminology, reading articles on Ives Lafont's interaction nets is advised. For basic introduction to bancai-specific implementation of interaction nets, skip ahead to the **Core ideas** section down below.
 
 # Programming
 
@@ -54,9 +54,9 @@ For now, that's all there is to it: rules and nets. For more interesting example
 
 # Extension of interaction nets
 
-While interaction nets can be used to compute anything, it will be rather painful to do so without extensions. Fortunately, pinet is designed to be a playground for testing such extensions.
+While interaction nets can be used to compute anything, it will be rather painful to do so without extensions. Fortunately, bancai is designed to be a playground for testing such extensions.
 
-Pinet currently has several extensions. Examples:
+Bancai currently has several extensions. Examples:
 
 1. Builtin agents. Added by creating a separate table for builtin agents, that contains function pointers to their implementation, making it somewhat easy to add new ones.
 2. Floating-point and integer numbers. These are added by extending the `Value` concept. Each number is translated to an agent with a reserved name `#number`, and one auxillary port which always contains the underlying number.
@@ -65,7 +65,7 @@ Pinet currently has several extensions. Examples:
 
 # Core ideas
 
-Pinet is using two basic concepts to implement interaction nets: agents and names.
+bancai is using two basic concepts to implement interaction nets: agents and names.
 
 ## Agent
 
@@ -79,6 +79,6 @@ Name is a special reference. You can think of it as a variable or a function par
 
 Names have a restriction. They can only be used once (and they will appear twice in your programs, once coming in and once leaving the scope).
 
-Under the hood pinet uses a concept called `Value`, which is basically a reference for another agent or name. This way, the agent is its identifier and a list of `Value`'s on auxillary ports. A name is simply an optional `Value`.
+Under the hood bancai uses a concept called `Value`, which is basically a reference for another agent or name. This way, the agent is its identifier and a list of `Value`'s on auxillary ports. A name is simply an optional `Value`.
 
 Names are specific to this current implementation. It is speculative whether we can represent ports in a different way more efficiently, without introducing these optional references.
