@@ -146,10 +146,6 @@ pub const RuleTable = struct {
     }
 };
 
-pub fn getAgentName(self: *const Self, agent_id: Agent.Id) ?[]const u8 {
-    return self.agent_id_map.findKey(agent_id);
-}
-
 agent_id_map: IdCountingHashMap,
 agent_arities: ArityMap,
 associated_names: std.StringHashMap(?*Name),
