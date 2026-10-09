@@ -105,22 +105,20 @@ fn evalCondition(c: *Core, lagent: *Agent, ragent: *Agent, instructions: []Condi
     unreachable;
 }
 
+fn isDup2(id: Agent.Id) bool {
+    return id == (comptime Builtin.BuiltinNameMap.get("Dup").?) or id == (comptime Builtin.BuiltinNameMap.get("DupCopy").?) or id == (comptime Builtin.BuiltinNameMap.get("Dup2").?);
+}
+
 /// Copy on write. We copy the agent. After that, all its
 /// ports are looked at by two agents (the original and the copy).
 /// If the original has an empty port, then it is a nested pattern matching
 /// problem.
 fn cow(c: *Core, agent: *Agent) !?*Agent {
     std.debug.assert(agent.rc > 1);
-    const number_id = comptime Builtin.BuiltinNameMap.get(Builtin.number_builtin_ident).?;
-    agent.rc -= 1;
+    const dup_copy_id = comptime Builtin.BuiltinNameMap.get("DupCopy").?;
     const arity = c.runtime.agent_arities.arityOf(agent.id);
-    if (agent.id != number_id) {
-        // Checking, whether we have a nested pattern matching problem.
-        for (0..arity) |port_idx| {
-            if (agent.ports[port_idx].?.getAgent() == null) return null;
-        }
-    }
 
+    agent.rc -= 1;
     const new_me = try c.createAgent(agent.id);
 
     for (0..arity) |port_idx| {
@@ -128,11 +126,29 @@ fn cow(c: *Core, agent: *Agent) !?*Agent {
             new_me.ports[port_idx] = agent.ports[port_idx];
             break;
         }
+
         const possible_agent = agent.ports[port_idx].?.getAgent();
-        std.debug.assert(possible_agent != null);
-        const port_agent = possible_agent.?;
-        port_agent.rc += 1;
-        new_me.ports[port_idx] = .{ .agent = port_agent };
+        if (possible_agent) |port_agent| {
+            if (!isDup2(port_agent.id) or true) {
+                port_agent.rc += 1;
+                new_me.ports[port_idx] = .{ .agent = port_agent };
+            } else {
+                agent.ports[port_idx] = port_agent.ports[0];
+                new_me.ports[port_idx] = port_agent.ports[1];
+                c.local_ctx.freeOneAgent(port_agent);
+            }
+        } else {
+            const name = agent.ports[port_idx].?.name.traverseFree(c.local_ctx.name_heap);
+            const dup_copy = try c.createAgent(dup_copy_id);
+            name.port = .{ .agent = dup_copy };
+
+            const orig_port_name = try c.createEmptyName();
+            const copy_port_name = try c.createEmptyName();
+            dup_copy.ports[0] = .{ .name = orig_port_name };
+            dup_copy.ports[1] = .{ .name = copy_port_name };
+            agent.ports[port_idx] = .{ .name = orig_port_name };
+            new_me.ports[port_idx] = .{ .name = copy_port_name };
+        }
     }
 
     return new_me;
@@ -161,7 +177,6 @@ pub fn evalEquation(c: *Core, eq: Equation) !void {
             c.runtime.getAgentName(ragent.id).?,
         });
     }
-
     if (Builtin.isBuiltinAgent(lagent.id)) {
         const handler = Builtin.BuiltinTable.get(lagent.id).?;
         if (handler(c, lagent, ragent)) {

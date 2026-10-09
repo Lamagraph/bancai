@@ -70,6 +70,7 @@ pub const builtin_agents = [_]BuiltinAgent{
     .{ .name = "Dup2", .arity = 2, .impl = dupReference },
     .{ .name = "Dup3", .arity = 3, .impl = dupReference },
     .{ .name = "Dup4", .arity = 4, .impl = dupReference },
+    .{ .name = "DupCopy", .arity = 2, .impl = dupCopy },
 
     // Tuples
     .{ .name = "Tuple0", .arity = 0, .impl = tuple },
@@ -92,6 +93,12 @@ pub const builtin_agents = [_]BuiltinAgent{
     .{ .name = "Nil", .arity = 0, .impl = unbuiltin },
     .{ .name = "MakeRandomList", .arity = 1, .impl = make_random_list },
 };
+
+pub fn isDup(id: Agent.Id) bool {
+    const dup_start = comptime BuiltinNameMap.get("Dup").?;
+    const dup_end = comptime BuiltinNameMap.get("DupCopy").?;
+    return dup_start <= id and id <= dup_end;
+}
 
 // Add more builtin agents logic here
 
@@ -307,6 +314,9 @@ pub fn dupCopy(c: *Core, self: *Agent, ag: *Agent) BuiltinAgentError!void {
 }
 
 pub fn dupReference(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!void {
+    if (isDup(other.id)) {
+        return BuiltinAgentError.BadSecondaryArgument;
+    }
     defer c.local_ctx.freeOneAgent(self);
     const dup_arity = c.runtime.agent_arities.arityOf(self.id);
     other.rc += dup_arity - 1;
