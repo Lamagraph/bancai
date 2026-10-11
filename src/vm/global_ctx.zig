@@ -14,12 +14,16 @@ const Core = @import("core.zig");
 const Config = @import("config.zig").Config;
 const Normalize = @import("normalize.zig");
 
-const getUser = "getUser";
-
 pub const GlobalCtx = struct {
     agent_heap: Memory.Heap(Agent),
     name_heap: Memory.Heap(Name),
     equation_fetcher: EquationFetcher,
+
+    /// Heaps and fetcher are shared between cores - multithread needs locked ones.
+    locked: bool,
+
+    const FetcherType = EquationFetcher.ThreeDequeEquationFetcher;
+    const LockedFetcherType = EquationFetcher.LockedEquationFetcher;
 
     fn HeapType(comptime T: type) type {
         switch (BuildConfig.heap) {
@@ -28,89 +32,138 @@ pub const GlobalCtx = struct {
         }
     }
 
-    fn heapInit(comptime T: type, heap_size: usize, gpa: std.mem.Allocator) !Memory.Heap(T) {
+    fn LockedHeapType(comptime T: type) type {
+        return Memory.LockedHeap(T);
+    }
+
+    fn heapInit(
+        comptime T: type,
+        heap_size: usize,
+        locked: bool,
+        gpa: std.mem.Allocator,
+    ) !Memory.Heap(T) {
         const basic_heap = try gpa.create(HeapType(T));
+        errdefer gpa.destroy(basic_heap);
 
         basic_heap.* = switch (BuildConfig.heap) {
             .basic => try Memory.BasicHeap(T).init(gpa, heap_size),
             .objpool => try Memory.ObjPool(T).init(gpa, heap_size),
         };
+        errdefer basic_heap.deinit(gpa);
 
-        return basic_heap.heap();
+        if (!locked) {
+            return basic_heap.heap();
+        }
+
+        const locked_heap = try gpa.create(LockedHeapType(T));
+        locked_heap.* = LockedHeapType(T).init(basic_heap.heap());
+
+        return locked_heap.heap();
     }
 
-    fn heapDeinit(comptime T: type, heap: Memory.Heap(T), gpa: std.mem.Allocator) void {
-        const basic_heap: *HeapType(T) = @ptrCast(@alignCast(heap.ptr));
+    fn heapDeinit(
+        comptime T: type,
+        heap: Memory.Heap(T),
+        locked: bool,
+        gpa: std.mem.Allocator,
+    ) void {
+        var inner = heap;
+        if (locked) {
+            const locked_heap: *LockedHeapType(T) = @ptrCast(@alignCast(heap.ptr));
+            inner = locked_heap.inner;
+            gpa.destroy(locked_heap);
+        }
+
+        const basic_heap: *HeapType(T) = @ptrCast(@alignCast(inner.ptr));
 
         basic_heap.deinit(gpa);
         gpa.destroy(basic_heap);
     }
 
-    fn equationFetcherInit(gpa: std.mem.Allocator) !EquationFetcher {
-        const FetcherType = EquationFetcher.ThreeDequeEquationFetcher;
+    fn equationFetcherInit(locked: bool, gpa: std.mem.Allocator) !EquationFetcher {
         const three_deque_equation_fetcher = try gpa.create(FetcherType);
-        three_deque_equation_fetcher.* = .init(gpa);
+        errdefer gpa.destroy(three_deque_equation_fetcher);
 
-        return three_deque_equation_fetcher.equationFetcher();
+        three_deque_equation_fetcher.* = .init(gpa);
+        errdefer three_deque_equation_fetcher.deinit();
+
+        if (!locked) {
+            return three_deque_equation_fetcher.equationFetcher();
+        }
+
+        const locked_fetcher = try gpa.create(LockedFetcherType);
+        locked_fetcher.* = LockedFetcherType.init(three_deque_equation_fetcher.equationFetcher());
+
+        return locked_fetcher.equationFetcher();
     }
 
-    fn equationFetcherDeinit(equation_fetcher: EquationFetcher, gpa: std.mem.Allocator) void {
-        const FetcherType = EquationFetcher.ThreeDequeEquationFetcher;
-        const three_deque_equation_fetcher: *FetcherType = @ptrCast(@alignCast(equation_fetcher.ptr));
+    fn equationFetcherDeinit(
+        equation_fetcher: EquationFetcher,
+        locked: bool,
+        gpa: std.mem.Allocator,
+    ) void {
+        var inner = equation_fetcher;
+        if (locked) {
+            const locked_fetcher: *LockedFetcherType = @ptrCast(@alignCast(equation_fetcher.ptr));
+            inner = locked_fetcher.inner;
+            gpa.destroy(locked_fetcher);
+        }
+
+        const three_deque_equation_fetcher: *FetcherType = @ptrCast(@alignCast(inner.ptr));
         three_deque_equation_fetcher.deinit();
         gpa.destroy(three_deque_equation_fetcher);
     }
 
-    fn getHeapUser(comptime T: type, heap: Memory.Heap(T), gpa: std.mem.Allocator) Memory.Heap(T) {
-        _ = gpa;
-        const Concrete = HeapType(T);
-        if (@hasDecl(Concrete, getUser)) {
-            const concrete: *Concrete = @ptrCast(@alignCast(heap.ptr));
-            return concrete.getUser();
+    fn getHeapUser(comptime T: type, heap: Memory.Heap(T), locked: bool) Memory.Heap(T) {
+        if (!locked) {
+            return heap;
         }
 
-        // TODO:(kogora) mb should be unreachable
-        return heap;
+        const locked_heap: *LockedHeapType(T) = @ptrCast(@alignCast(heap.ptr));
+        return locked_heap.getUser();
     }
 
-    fn getFetcherUser(fetcher: EquationFetcher, gpa: std.mem.Allocator) EquationFetcher {
-        _ = gpa;
-        const Concrete = EquationFetcher.ThreeDequeEquationFetcher;
-        if (@hasDecl(Concrete, getUser)) {
-            const concrete: *Concrete = @ptrCast(@alignCast(fetcher.ptr));
-            return concrete.getUser();
+    fn getFetcherUser(fetcher: EquationFetcher, locked: bool) EquationFetcher {
+        if (!locked) {
+            return fetcher;
         }
-        return fetcher;
+
+        const locked_fetcher: *LockedFetcherType = @ptrCast(@alignCast(fetcher.ptr));
+        return locked_fetcher.getUser();
     }
 
     pub fn init(runtime: *Runtime, config: Config) !GlobalCtx {
-        const agent_heap = try heapInit(Agent, config.heap_size, runtime.gpa);
-        errdefer heapDeinit(Agent, agent_heap, runtime.gpa);
+        const locked = config.getMode() == .multiThread;
 
-        const name_heap = try heapInit(Name, config.heap_size, runtime.gpa);
-        errdefer heapDeinit(Name, name_heap, runtime.gpa);
+        const agent_heap = try heapInit(Agent, config.heap_size, locked, runtime.gpa);
+        errdefer heapDeinit(Agent, agent_heap, locked, runtime.gpa);
 
-        const equation_fetcher = try equationFetcherInit(runtime.gpa);
-        errdefer equationFetcherDeinit(equation_fetcher, runtime.gpa);
+        const name_heap = try heapInit(Name, config.heap_size, locked, runtime.gpa);
+        errdefer heapDeinit(Name, name_heap, locked, runtime.gpa);
+
+        const equation_fetcher = try equationFetcherInit(locked, runtime.gpa);
+        errdefer equationFetcherDeinit(equation_fetcher, locked, runtime.gpa);
 
         return .{
             .agent_heap = agent_heap,
             .name_heap = name_heap,
             .equation_fetcher = equation_fetcher,
+            .locked = locked,
         };
     }
 
     pub fn deinit(self: *GlobalCtx, gpa: std.mem.Allocator) void {
-        equationFetcherDeinit(self.equation_fetcher, gpa);
-        heapDeinit(Name, self.name_heap, gpa);
-        heapDeinit(Agent, self.agent_heap, gpa);
+        equationFetcherDeinit(self.equation_fetcher, self.locked, gpa);
+        heapDeinit(Name, self.name_heap, self.locked, gpa);
+        heapDeinit(Agent, self.agent_heap, self.locked, gpa);
     }
 
     pub fn createLocal(self: GlobalCtx, gpa: std.mem.Allocator) Core.LocalCtx {
+        _ = gpa;
         return .{
-            .agent_heap = getHeapUser(Agent, self.agent_heap, gpa),
-            .name_heap = getHeapUser(Name, self.name_heap, gpa),
-            .equation_fetcher = getFetcherUser(self.equation_fetcher, gpa),
+            .agent_heap = getHeapUser(Agent, self.agent_heap, self.locked),
+            .name_heap = getHeapUser(Name, self.name_heap, self.locked),
+            .equation_fetcher = getFetcherUser(self.equation_fetcher, self.locked),
         };
     }
 
@@ -131,7 +184,7 @@ pub const GlobalCtx = struct {
         };
     }
 
-    pub fn destroyLocal(self: *GlobalCtx, local_ctx: Core.LocalCtx, gpa: std.mem.Allocator) void {
+    pub fn destroyLocal(self: GlobalCtx, local_ctx: Core.LocalCtx, gpa: std.mem.Allocator) void {
         _ = self;
         _ = local_ctx;
         _ = gpa;
