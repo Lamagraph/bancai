@@ -26,8 +26,10 @@ pub const Config = @import("config.zig").Config;
 
 pub const MainCtrl = @import("mt/main_ctrl.zig");
 pub const WorkerCtrl = @import("mt/worker_ctrl.zig");
+pub const WorkerState = @import("mt/worker_ctrl.zig").State;
 
 pub const GlobalCtx = @import("global_ctx.zig").GlobalCtx;
+const Multi = @import("mt/multi.zig").Multi;
 
 pub const Builtin = @import("builtin.zig");
 pub const Importer = @import("importer.zig");
@@ -39,80 +41,85 @@ pub const normalizeEquation = Normalize.normalizeEquation;
 const VM = @This();
 const Self = VM;
 
+const log = std.log.scoped(.vm);
+
 cfg: Config,
 profiler: *Profiler,
 
 global_ctx: GlobalCtx,
 runtime: *Runtime,
 
-main_ctrl: ?*MainCtrl,
-worker_ctrl: ?*WorkerCtrl,
-
 main_core: Core,
-cores: []Core,
+vmode: VMode,
 
-var available_core_id: usize = 0;
+const VMode = union(enum) {
+    const Single = void;
 
-fn destroyWorkerCores(
-    cores: []Core,
-    global_ctx: *GlobalCtx,
-    runtime: *Runtime,
-) void {
-    for (cores) |*c| global_ctx.destroyLocal(c.local_ctx, runtime.gpa);
-    runtime.gpa.free(cores);
-}
+    s: Single,
+    m: Multi,
 
-fn createWorkerCores(
-    runtime: *Runtime,
-    global_ctx: GlobalCtx,
-    core_num: usize,
-    worker_ctrl: *WorkerCtrl,
-    profiler: *Profiler,
-) ![]Core {
-    const cores: []Core = try runtime.gpa.alloc(Core, core_num);
-    errdefer runtime.gpa.free(cores);
-
-    const start_id = available_core_id;
-    for (cores, start_id..) |*c, core_id| {
-        c.* = Core.init(
-            CoreId{ .worker = @intCast(core_id) },
-            CoreMode.singleThread,
-            runtime,
-            Core.CoreCtrl{ .worker = worker_ctrl },
-            global_ctx.createLocal(runtime.gpa),
-            profiler,
-        );
-
-        available_core_id += 1;
+    fn initS() VMode {
+        return .{ .s = {} };
     }
 
-    return cores;
-}
+    fn initM(
+        cfg: Config,
+        runtime: *Runtime,
+        gpa: std.mem.Allocator,
+        global_ctx: GlobalCtx,
+        profiler: *Profiler,
+    ) !VMode {
+        return .{ .m = try Multi.init(
+            cfg.cores_num,
+            gpa,
+            runtime,
+            global_ctx,
+            runtime.io,
+            profiler,
+        ) };
+    }
+
+    fn deinit(
+        self: *VMode,
+        gpa: std.mem.Allocator,
+        global_ctx: GlobalCtx,
+    ) void {
+        switch (self.*) {
+            .s => {},
+            .m => |*m| {
+                m.deinit(global_ctx, gpa);
+            },
+        }
+    }
+};
 
 pub fn deinit(self: *Self) void {
-    destroyWorkerCores(self.cores, &self.global_ctx, self.runtime);
+    switch (self.vmode) {
+        .s => {},
+        .m => |*m| {
+            std.debug.assert(!m.anyCoreThreadSpawned());
+
+            m.deinit(self.global_ctx, self.runtime.gpa);
+        },
+    }
+
     self.global_ctx.deinit(self.runtime.gpa);
-    if (self.worker_ctrl) |worker_ctrl| self.runtime.gpa.destroy(worker_ctrl);
-    if (self.main_ctrl) |main_ctrl| self.runtime.gpa.destroy(main_ctrl);
 }
 
 pub fn init(runtime: *Runtime, cfg: Config, profiler: *Profiler) !Self {
     try cfg.isValid();
 
     const mode = cfg.getMode();
-    std.debug.assert(mode == CoreMode.singleThread); // TODO:(kogora): multithread version
 
     var main_core: Core = undefined;
-    var main_ctrl: ?*MainCtrl = null;
-
-    var worker_ctrl: ?*WorkerCtrl = null;
-    var cores: []Core = &.{};
+    var vmode: VMode = undefined;
 
     var global_ctx = try GlobalCtx.init(runtime, cfg);
     errdefer global_ctx.deinit(runtime.gpa);
 
     switch (mode) {
         .singleThread => {
+            vmode = VMode.initS();
             main_core = Core.init(
                 CoreId{ .main = {} },
                 mode,
@@ -123,35 +130,23 @@ pub fn init(runtime: *Runtime, cfg: Config, profiler: *Profiler) !Self {
             );
         },
         .multiThread => {
-            const created_main_ctrl = try runtime.gpa.create(MainCtrl);
-            errdefer runtime.gpa.destroy(created_main_ctrl);
-            created_main_ctrl.* = MainCtrl.init();
-            main_ctrl = created_main_ctrl;
+            vmode = try VMode.initM(cfg, runtime, runtime.gpa, global_ctx, profiler);
+            errdefer vmode.deinit(runtime.gpa, global_ctx);
 
             main_core = Core.init(
                 CoreId{ .main = {} },
                 mode,
                 runtime,
-                Core.CoreCtrl{ .main = created_main_ctrl },
+                Core.CoreCtrl{ .main = vmode.m.main_ctrl },
                 try global_ctx.createVmLocal(),
                 profiler,
             );
-
-            const created_worker_ctrl = try runtime.gpa.create(WorkerCtrl);
-            errdefer runtime.gpa.destroy(created_worker_ctrl);
-            created_worker_ctrl.* = WorkerCtrl.init();
-            worker_ctrl = created_worker_ctrl;
-
-            cores = try createWorkerCores(runtime, global_ctx, cfg.cores_num, created_worker_ctrl, profiler);
-            errdefer destroyWorkerCores(cores, &global_ctx, runtime);
         },
     }
 
     return .{
         .main_core = main_core,
-        .cores = cores,
-        .main_ctrl = main_ctrl,
-        .worker_ctrl = worker_ctrl,
+        .vmode = vmode,
         .global_ctx = global_ctx,
         .runtime = runtime,
         .cfg = cfg,
@@ -331,8 +326,7 @@ inline fn execActivePairMultiCores(self: *Self) !void {
         return;
     }
 
-    // TODO:(kogora): multithread version
-    try self.cores[0].eval();
+    try self.vmode.m.eval();
 }
 
 inline fn execActivePairMode(self: *Self, mode: CoreMode) !void {
@@ -346,7 +340,36 @@ inline fn execActivePair(self: *Self, mode: CoreMode) !void {
     try self.execActivePairMode(mode);
 }
 
+fn startCores(self: *Self) !void {
+    if (self.cfg.getMode() != .multiThread) {
+        return;
+    }
+
+    const m: *Multi = &self.vmode.m;
+    log.info("starting {} core(s)", .{m.slots.len});
+
+    try m.start();
+
+    log.info("{} core(s) started", .{m.slots.len});
+}
+
+fn stopCores(self: *Self) void {
+    if (self.cfg.getMode() != .multiThread) {
+        return;
+    }
+
+    const m: *Multi = &self.vmode.m;
+    log.info("stopping {} core(s)", .{m.slots.len});
+
+    m.exit();
+
+    log.info("{} core(s) stopped", .{m.slots.len});
+}
+
 pub fn runProgram(self: *Self, program: AST.Program) !void {
+    try self.startCores();
+    defer self.stopCores();
+
     for (program.statements) |statement| {
         switch (statement.val) {
             .print_stmt => |name_to_print| try self.printStmt(name_to_print),
