@@ -36,6 +36,8 @@ const EquationUnnormalized = Types.EquationUnnormalized;
 const Core = @This();
 const Self = Core;
 
+const log = std.log.scoped(.core);
+
 const number_of_registers = 256;
 
 id: CoreId,
@@ -58,6 +60,10 @@ pub const CoreCtrl = union(CoreRole) {
     main: *MainCtrl,
     worker: *WorkerCtrl,
 };
+
+inline fn workerCtrl(self: *Self) *WorkerCtrl {
+    return self.core_ctrl.?.worker;
+}
 
 /// Per-core state - the heap and fetcher a given Core exclusively works
 /// with, as opposed to CoreCommon which every Core shares.
@@ -214,9 +220,60 @@ inline fn evalAsMain(c: *Core) !void {
 }
 
 inline fn evalAsWorker(c: *Core) !void {
-    // TODO:(kogora) add core_ctrl usage (as WorkerCtrl)
-    while (c.local_ctx.fetchEquation()) |eq| {
-        try Interaction.evalEquation(c, eq);
+    const ctrl = c.workerCtrl();
+
+    { // Init work (newborn -> applicant)
+        const new_state = ctrl.getStatePriv().applicantState();
+        ctrl.putState(new_state);
+    }
+    defer { // Deinit work (goner -> corpse)
+        const new_state = ctrl.getStatePriv().corpseState();
+        ctrl.putState(new_state);
+    }
+
+    live: while (true) {
+        var cur_state = ctrl.getStatePriv();
+
+        if (cur_state != .goner) {
+            if (ctrl.receiveSig()) |sig| {
+                cur_state = cur_state.sigNextState(sig) orelse cur_state;
+
+                // Must precede ackSig: the VM relies on it.
+                ctrl.putState(cur_state);
+                ctrl.ackSig();
+            }
+        }
+
+        switch (cur_state) {
+            .busy => {
+                var new_state: WorkerCtrl.State = undefined;
+
+                eval: {
+                    const eq = c.local_ctx.fetchEquation() orelse {
+                        new_state = cur_state.applicantState();
+                        break :eval;
+                    };
+
+                    Interaction.evalEquation(c, eq) catch |err| {
+                        log.err("core-{}: {s}", .{ c.id.worker, @errorName(err) });
+                        new_state = cur_state.gonerState();
+                        break :eval;
+                    };
+
+                    continue :live;
+                }
+
+                ctrl.putState(new_state);
+            },
+            .applicant => {
+                std.atomic.spinLoopHint();
+            },
+            .goner => {
+                log.debug("core-{} is a goner", .{c.id.worker});
+                break :live;
+            },
+            .corpse, .newborn => unreachable,
+        }
     }
 }
 
