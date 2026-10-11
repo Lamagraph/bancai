@@ -366,3 +366,7 @@ pub fn runProgram(self: *Self, program: AST.Program) !void {
         }
     }
 }
+
+test {
+    _ = @import("mt/signals.zig");
+}
