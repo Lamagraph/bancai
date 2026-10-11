@@ -18,7 +18,7 @@ const help =
     \\-t, --threads <usize>          Specify number of threads to be run on (this does not work yet).
     \\-m, --heap-size <usize>        Specify the initial size of the heap. Default: 1024
     \\-f, --filepath <str>           Specify file to be interpreted.
-    \\-w, --warmup                   In multiThread mode, have the master core take a first pass at reducing equations before handing off to the worker cores.
+    \\-w, --warmup                   In multiThread mode, have the main core take a first pass at reducing equations before handing off to the worker cores.
     \\
 ++ export_results ++ interaction_profiler ++ "\n";
 const params = clap.parseParamsComptime(help);

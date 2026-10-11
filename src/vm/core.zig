@@ -18,8 +18,8 @@ const Compilation = @import("compilation");
 const Instruction = Compilation.Instruction;
 const Condition = Compilation.Condition;
 
-const CoreMasterCtrl = @import("core_master_ctrl.zig");
-const CoreSlaveCtrl = @import("core_slave_ctrl.zig");
+const MainCtrl = @import("mt/main_ctrl.zig");
+const WorkerCtrl = @import("mt/worker_ctrl.zig");
 const Normalize = @import("normalize.zig");
 
 const Agent = Types.Agent;
@@ -50,7 +50,7 @@ registers: [number_of_registers]Value,
 condition_registers: [number_of_registers]Condition.Register.CondValue,
 
 pub const CoreMode = enum { singleThread, multiThread };
-pub const CoreRole = enum { master, slave };
+pub const CoreRole = enum { main, worker };
 
 pub const CoreRc = enum(u8) {
     /// The core finished execution normally.
@@ -60,13 +60,13 @@ pub const CoreRc = enum(u8) {
 };
 
 pub const CoreId = union(CoreRole) {
-    master: void,
-    slave: u32,
+    main: void,
+    worker: u32,
 };
 
 pub const CoreCtrl = union(CoreRole) {
-    master: *CoreMasterCtrl,
-    slave: *CoreSlaveCtrl,
+    main: *MainCtrl,
+    worker: *WorkerCtrl,
 };
 
 /// Per-core state - the heap and fetcher a given Core exclusively works
@@ -217,8 +217,8 @@ inline fn runEquationsSingleThread(c: *Core) !CoreRc {
     return .finishRc;
 }
 
-inline fn runEquationsMaster(c: *Core) !CoreRc {
-    // TODO:(kogora) add core_ctrl usage (as CoreMasterCtrl)
+inline fn runEquationsMain(c: *Core) !CoreRc {
+    // TODO:(kogora) add core_ctrl usage (as MainCtrl)
     while (c.local_ctx.fetchEquation()) |eq| {
         try Interaction.evalEquation(c, eq);
     }
@@ -226,8 +226,8 @@ inline fn runEquationsMaster(c: *Core) !CoreRc {
     return .finishRc;
 }
 
-inline fn runEquationsSlave(c: *Core) !CoreRc {
-    // TODO:(kogora) add core_ctrl usage (as CoreSlaveCtrl)
+inline fn runEquationsWorker(c: *Core) !CoreRc {
+    // TODO:(kogora) add core_ctrl usage (as WorkerCtrl)
     while (c.local_ctx.fetchEquation()) |eq| {
         try Interaction.evalEquation(c, eq);
     }
@@ -239,8 +239,8 @@ pub fn runEquations(c: *Core) !CoreRc {
     return switch (c.mode) {
         .singleThread => try runEquationsSingleThread(c),
         .multiThread => switch (c.id) {
-            .master => try runEquationsMaster(c),
-            .slave => try runEquationsSlave(c),
+            .main => try runEquationsMain(c),
+            .worker => try runEquationsWorker(c),
         },
     };
 }

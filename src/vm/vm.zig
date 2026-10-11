@@ -19,8 +19,8 @@ const EquationUnnormalized = Types.EquationUnnormalized;
 
 pub const Builtin = @import("builtin.zig");
 pub const Core = @import("core.zig");
-pub const CoreMasterCtrl = @import("core_master_ctrl.zig");
-pub const CoreSlaveCtrl = @import("core_slave_ctrl.zig");
+pub const MainCtrl = @import("mt/main_ctrl.zig");
+pub const WorkerCtrl = @import("mt/worker_ctrl.zig");
 pub const Importer = @import("importer.zig");
 pub const Interaction = @import("interactions.zig");
 const Normalize = @import("normalize.zig");
@@ -38,10 +38,10 @@ profiler: *Profiler,
 global_ctx: GlobalCtx,
 runtime: *Runtime,
 
-master_ctrl: ?*CoreMasterCtrl,
-slave_ctrl: ?*CoreSlaveCtrl,
+main_ctrl: ?*MainCtrl,
+worker_ctrl: ?*WorkerCtrl,
 
-vm_core: Core,
+main_core: Core,
 cores: []Core,
 
 var available_core_id: usize = 0;
@@ -205,7 +205,7 @@ pub const GlobalCtx = struct {
     }
 };
 
-fn destroySlaveCores(
+fn destroyWorkerCores(
     cores: []Core,
     global_ctx: *GlobalCtx,
     runtime: *Runtime,
@@ -214,11 +214,11 @@ fn destroySlaveCores(
     runtime.gpa.free(cores);
 }
 
-fn createSlaveCores(
+fn createWorkerCores(
     runtime: *Runtime,
     global_ctx: GlobalCtx,
     core_num: usize,
-    slave_ctrl: *CoreSlaveCtrl,
+    worker_ctrl: *WorkerCtrl,
     profiler: *Profiler,
 ) ![]Core {
     const cores: []Core = try runtime.gpa.alloc(Core, core_num);
@@ -227,10 +227,10 @@ fn createSlaveCores(
     const start_id = available_core_id;
     for (cores, start_id..) |*c, core_id| {
         c.* = Core.init(
-            Core.CoreId{ .slave = @intCast(core_id) },
+            Core.CoreId{ .worker = @intCast(core_id) },
             Core.CoreMode.singleThread,
             runtime,
-            Core.CoreCtrl{ .slave = slave_ctrl },
+            Core.CoreCtrl{ .worker = worker_ctrl },
             global_ctx.createLocal(runtime.gpa),
             profiler,
         );
@@ -242,10 +242,10 @@ fn createSlaveCores(
 }
 
 pub fn deinit(self: *Self) void {
-    destroySlaveCores(self.cores, &self.global_ctx, self.runtime);
+    destroyWorkerCores(self.cores, &self.global_ctx, self.runtime);
     self.global_ctx.deinit(self.runtime.gpa);
-    if (self.slave_ctrl) |slave_ctrl| self.runtime.gpa.destroy(slave_ctrl);
-    if (self.master_ctrl) |master_ctrl| self.runtime.gpa.destroy(master_ctrl);
+    if (self.worker_ctrl) |worker_ctrl| self.runtime.gpa.destroy(worker_ctrl);
+    if (self.main_ctrl) |main_ctrl| self.runtime.gpa.destroy(main_ctrl);
 }
 
 pub fn init(runtime: *Runtime, config: Config, profiler: *Profiler) !Self {
@@ -256,10 +256,10 @@ pub fn init(runtime: *Runtime, config: Config, profiler: *Profiler) !Self {
     // TODO:(kogora): multithread version
     std.debug.assert(mode == Core.CoreMode.singleThread);
 
-    var vm_core: Core = undefined;
-    var master_ctrl: ?*CoreMasterCtrl = null;
+    var main_core: Core = undefined;
+    var main_ctrl: ?*MainCtrl = null;
 
-    var slave_ctrl: ?*CoreSlaveCtrl = null;
+    var worker_ctrl: ?*WorkerCtrl = null;
     var cores: []Core = &.{};
 
     var global_ctx = try GlobalCtx.init(runtime, config);
@@ -267,8 +267,8 @@ pub fn init(runtime: *Runtime, config: Config, profiler: *Profiler) !Self {
 
     switch (mode) {
         .singleThread => {
-            vm_core = Core.init(
-                Core.CoreId{ .master = {} },
+            main_core = Core.init(
+                Core.CoreId{ .main = {} },
                 mode,
                 runtime,
                 null,
@@ -277,35 +277,35 @@ pub fn init(runtime: *Runtime, config: Config, profiler: *Profiler) !Self {
             );
         },
         .multiThread => {
-            const created_master_ctrl = try runtime.gpa.create(CoreMasterCtrl);
-            errdefer runtime.gpa.destroy(created_master_ctrl);
-            created_master_ctrl.* = CoreMasterCtrl.init();
-            master_ctrl = created_master_ctrl;
+            const created_main_ctrl = try runtime.gpa.create(MainCtrl);
+            errdefer runtime.gpa.destroy(created_main_ctrl);
+            created_main_ctrl.* = MainCtrl.init();
+            main_ctrl = created_main_ctrl;
 
-            vm_core = Core.init(
-                Core.CoreId{ .master = {} },
+            main_core = Core.init(
+                Core.CoreId{ .main = {} },
                 mode,
                 runtime,
-                Core.CoreCtrl{ .master = created_master_ctrl },
+                Core.CoreCtrl{ .main = created_main_ctrl },
                 try global_ctx.createVmLocal(),
                 profiler,
             );
 
-            const created_slave_ctrl = try runtime.gpa.create(CoreSlaveCtrl);
-            errdefer runtime.gpa.destroy(created_slave_ctrl);
-            created_slave_ctrl.* = CoreSlaveCtrl.init();
-            slave_ctrl = created_slave_ctrl;
+            const created_worker_ctrl = try runtime.gpa.create(WorkerCtrl);
+            errdefer runtime.gpa.destroy(created_worker_ctrl);
+            created_worker_ctrl.* = WorkerCtrl.init();
+            worker_ctrl = created_worker_ctrl;
 
-            cores = try createSlaveCores(runtime, global_ctx, config.cores_num, created_slave_ctrl, profiler);
-            errdefer destroySlaveCores(cores, &global_ctx, runtime);
+            cores = try createWorkerCores(runtime, global_ctx, config.cores_num, created_worker_ctrl, profiler);
+            errdefer destroyWorkerCores(cores, &global_ctx, runtime);
         },
     }
 
     return .{
-        .vm_core = vm_core,
+        .main_core = main_core,
         .cores = cores,
-        .master_ctrl = master_ctrl,
-        .slave_ctrl = slave_ctrl,
+        .main_ctrl = main_ctrl,
+        .worker_ctrl = worker_ctrl,
         .global_ctx = global_ctx,
         .runtime = runtime,
         .config = config,
@@ -404,11 +404,11 @@ inline fn freeStmt(self: *Self, names: []const AST.Name) !void {
         if (self.runtime.associated_names.get(name)) |maybe_wire| {
             defer _ = self.runtime.associated_names.remove(name);
             if (maybe_wire) |wire| {
-                const traversed = wire.traverseFree(self.vm_core.local_ctx.name_heap);
-                defer self.vm_core.local_ctx.name_heap.freeOne(traversed);
+                const traversed = wire.traverseFree(self.main_core.local_ctx.name_heap);
+                defer self.main_core.local_ctx.name_heap.freeOne(traversed);
                 if (traversed.port) |port| {
                     // of course, there shouldn't be anything other than an agent
-                    try Builtin.Eraser.erase(&self.vm_core, port.agent);
+                    try Builtin.Eraser.erase(&self.main_core, port.agent);
                 }
             }
         } else {
@@ -473,12 +473,12 @@ inline fn prepareActivePair(self: *Self, ap: AST.ActivePair) !?Profiler.Interact
 }
 
 inline fn execActivePairVmCore(self: *Self) !void {
-    _ = try self.vm_core.runEquations();
+    _ = try self.main_core.runEquations();
 }
 
 inline fn execActivePairMultiCores(self: *Self) !void {
     if (self.config.warmup) {
-        const rc = try self.vm_core.runEquations();
+        const rc = try self.main_core.runEquations();
         if (rc == Core.CoreRc.finishRc) {
             return;
         }
@@ -511,7 +511,7 @@ pub fn runProgram(self: *Self, program: AST.Program) !void {
             .active_pair => |ap| {
                 const interaction = try self.prepareActivePair(ap) orelse continue;
                 self.profiler.startInteraction(interaction);
-                try self.execActivePair(self.vm_core.mode);
+                try self.execActivePair(self.main_core.mode);
                 self.profiler.endInteraction(.{
                     .agent_heap = self.global_ctx.agent_heap,
                     .name_heap = self.global_ctx.name_heap,
