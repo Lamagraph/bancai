@@ -22,6 +22,11 @@ const MainCtrl = @import("mt/main_ctrl.zig");
 const WorkerCtrl = @import("mt/worker_ctrl.zig");
 const Normalize = @import("normalize.zig");
 
+const CoreMode = @import("core_types.zig").CoreMode;
+const CoreId = @import("core_types.zig").CoreId;
+const CoreRc = @import("core_types.zig").CoreRc;
+const CoreRole = @import("core_types.zig").CoreRole;
+
 const Agent = Types.Agent;
 const Value = Types.Value;
 const Name = Types.Name;
@@ -48,21 +53,6 @@ local_ctx: LocalCtx,
 
 registers: [number_of_registers]Value,
 condition_registers: [number_of_registers]Condition.Register.CondValue,
-
-pub const CoreMode = enum { singleThread, multiThread };
-pub const CoreRole = enum { main, worker };
-
-pub const CoreRc = enum(u8) {
-    /// The core finished execution normally.
-    finishRc = 0,
-    /// The core was stopped for some reason.
-    stopRc,
-};
-
-pub const CoreId = union(CoreRole) {
-    main: void,
-    worker: u32,
-};
 
 pub const CoreCtrl = union(CoreRole) {
     main: *MainCtrl,
@@ -209,38 +199,33 @@ pub fn execInstructions(
     }
 }
 
-inline fn runEquationsSingleThread(c: *Core) !CoreRc {
+inline fn evalAsSingleThread(c: *Core) !void {
+    // NOTE:(kogora) dont use CoreCtrl at all
     while (c.local_ctx.fetchEquation()) |eq| {
         try Interaction.evalEquation(c, eq);
     }
-
-    return .finishRc;
 }
 
-inline fn runEquationsMain(c: *Core) !CoreRc {
+inline fn evalAsMain(c: *Core) !void {
     // TODO:(kogora) add core_ctrl usage (as MainCtrl)
     while (c.local_ctx.fetchEquation()) |eq| {
         try Interaction.evalEquation(c, eq);
     }
-
-    return .finishRc;
 }
 
-inline fn runEquationsWorker(c: *Core) !CoreRc {
+inline fn evalAsWorker(c: *Core) !void {
     // TODO:(kogora) add core_ctrl usage (as WorkerCtrl)
     while (c.local_ctx.fetchEquation()) |eq| {
         try Interaction.evalEquation(c, eq);
     }
-
-    return .finishRc;
 }
 
-pub fn runEquations(c: *Core) !CoreRc {
+pub fn eval(c: *Core) !void {
     return switch (c.mode) {
-        .singleThread => try runEquationsSingleThread(c),
+        .singleThread => try evalAsSingleThread(c),
         .multiThread => switch (c.id) {
-            .main => try runEquationsMain(c),
-            .worker => try runEquationsWorker(c),
+            .main => try evalAsMain(c),
+            .worker => try evalAsWorker(c),
         },
     };
 }
