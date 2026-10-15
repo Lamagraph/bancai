@@ -56,6 +56,53 @@ pub fn deinit() void {
 
 pub const number_builtin_ident = AST.number_special_ident;
 
+const dups = init: {
+    const ref_max_arity = 4;
+    const copy_max_arity = 4;
+    const default_impl = dupCopy;
+    const default_arity = 2;
+    const default_max_arity = 4;
+
+    const default_name = "Dup";
+    const ref_name = "DupRef";
+    const copy_name = "DupCopy";
+
+    // + 1 because default_arity..max_arity is end inclusive. + 1 for arityless name
+    const dup_cnt = (ref_max_arity - default_arity + 1 + 1) + (copy_max_arity - default_arity + 1 + 1) + (default_max_arity - default_arity + 1 + 1);
+
+    var lst: [dup_cnt]BuiltinAgent = undefined;
+
+    var item_idx: comptime_int = 0;
+
+    {
+        lst[item_idx] = .{ .name = std.fmt.comptimePrint("{s}", .{default_name}), .arity = default_arity, .impl = default_impl };
+        item_idx += 1;
+        lst[item_idx] = .{ .name = std.fmt.comptimePrint("{s}", .{ref_name}), .arity = default_arity, .impl = dupReference };
+        item_idx += 1;
+        lst[item_idx] = .{ .name = std.fmt.comptimePrint("{s}", .{copy_name}), .arity = default_arity, .impl = dupCopy };
+        item_idx += 1;
+    }
+
+    for (default_arity..default_max_arity + 1) |arity_idx| {
+        lst[item_idx] = .{ .name = std.fmt.comptimePrint("{s}{}", .{ default_name, arity_idx }), .arity = arity_idx, .impl = default_impl };
+        item_idx += 1;
+    }
+
+    for (default_arity..ref_max_arity + 1) |arity_idx| {
+        lst[item_idx] = .{ .name = std.fmt.comptimePrint("{s}{}", .{ ref_name, arity_idx }), .arity = arity_idx, .impl = dupReference };
+        item_idx += 1;
+    }
+
+    for (default_arity..copy_max_arity + 1) |arity_idx| {
+        lst[item_idx] = .{ .name = std.fmt.comptimePrint("{s}{}", .{ copy_name, arity_idx }), .arity = arity_idx, .impl = dupCopy };
+        item_idx += 1;
+    }
+
+    std.debug.assert(item_idx == dup_cnt);
+
+    break :init lst;
+};
+
 // Making this empty makes there be no
 // builtin agents. TODO: use compile flag for that
 //
@@ -64,13 +111,6 @@ pub const builtin_agents = [_]BuiltinAgent{
     .{ .name = "Exiter", .arity = 0, .impl = exiter },
 
     .{ .name = "Eraser", .arity = 0, .impl = eraser },
-
-    // Dups
-    .{ .name = "Dup", .arity = 2, .impl = dupReference },
-    .{ .name = "Dup2", .arity = 2, .impl = dupReference },
-    .{ .name = "Dup3", .arity = 3, .impl = dupReference },
-    .{ .name = "Dup4", .arity = 4, .impl = dupReference },
-    .{ .name = "DupCopy", .arity = 2, .impl = dupCopy },
 
     // Tuples
     .{ .name = "Tuple0", .arity = 0, .impl = tuple },
@@ -92,13 +132,7 @@ pub const builtin_agents = [_]BuiltinAgent{
     .{ .name = "Cons", .arity = 2, .impl = unbuiltin },
     .{ .name = "Nil", .arity = 0, .impl = unbuiltin },
     .{ .name = "MakeRandomList", .arity = 1, .impl = make_random_list },
-};
-
-pub fn isDup(id: Agent.Id) bool {
-    const dup_start = comptime BuiltinNameMap.get("Dup").?;
-    const dup_end = comptime BuiltinNameMap.get("DupCopy").?;
-    return dup_start <= id and id <= dup_end;
-}
+} ++ dups;
 
 // Add more builtin agents logic here
 
@@ -313,10 +347,50 @@ pub fn dupCopy(c: *Core, self: *Agent, ag: *Agent) BuiltinAgentError!void {
     }
 }
 
-pub fn dupReference(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!void {
-    if (isDup(other.id)) {
-        return BuiltinAgentError.BadSecondaryArgument;
+pub const reference_duplicator = struct {
+    /// Copy on write. We copy the agent. After that, all its
+    /// ports are looked at by two agents (the original and the copy).
+    /// If the original has an empty port, then it is a nested pattern matching
+    /// problem.
+    pub fn cow(c: *Core, agent: *Agent) !*Agent {
+        std.debug.assert(agent.rc > 1);
+        const dup_copy_id = comptime BuiltinNameMap.get("DupCopy2").?;
+        const arity = c.runtime.agent_arities.arityOf(agent.id);
+
+        agent.rc -= 1;
+        const new_me = try c.createAgent(agent.id);
+
+        for (0..arity) |port_idx| {
+            if (agent.ports[port_idx] == .special) {
+                new_me.ports[port_idx] = agent.ports[port_idx];
+                break;
+            }
+
+            const possible_agent = agent.ports[port_idx].getAgent();
+            if (possible_agent) |port_agent| {
+                port_agent.rc += 1;
+                new_me.ports[port_idx] = .{ .agent = port_agent };
+            } else {
+                @branchHint(.cold);
+                const name = agent.ports[port_idx].name.traverseFree(c.local_ctx.name_heap);
+                // Meaning, Tuple2(w, f(w)) type of net is impossible to be used with DupRef
+                const dup_copy = try c.createAgent(dup_copy_id);
+                name.port = .{ .agent = dup_copy };
+
+                const orig_port_name = try c.createEmptyName();
+                const copy_port_name = try c.createEmptyName();
+                dup_copy.ports[0] = .{ .name = orig_port_name };
+                dup_copy.ports[1] = .{ .name = copy_port_name };
+                agent.ports[port_idx] = .{ .name = orig_port_name };
+                new_me.ports[port_idx] = .{ .name = copy_port_name };
+            }
+        }
+
+        return new_me;
     }
+};
+
+pub fn dupReference(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!void {
     defer c.local_ctx.freeOneAgent(self);
     const dup_arity = c.runtime.agent_arities.arityOf(self.id);
     other.rc += dup_arity - 1;
