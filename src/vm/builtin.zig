@@ -217,6 +217,9 @@ const copying_duplicator = struct {
                     } else {
                         agent.ports[idx] = Value{ .name = traversed };
                         if (ctx.names_map.getPtr(traversed)) |duplicating_name| {
+                            if (duplicating_name.* == .outer) {
+                                ctx.c.local_ctx.freeOneAgent(duplicating_name.outer.dup_agent);
+                            }
                             duplicating_name.* = .{
                                 .inner = .{
                                     .next_name = null,
@@ -342,7 +345,11 @@ pub fn number(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!void {
                     }
                 },
                 .agent => |agent| {
-                    return getSecondValue(agent.ports[0].?, _c);
+                    const result = getSecondValue(agent.ports[0].?, _c);
+                    if (result != null) {
+                        _c.local_ctx.freeOneAgent(agent);
+                    }
+                    return result;
                 },
                 .special => |special| return special,
             }
