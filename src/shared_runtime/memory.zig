@@ -199,6 +199,8 @@ pub fn ObjPool(comptime T: type) type {
         free_list: ?*Optional,
         free_count: usize,
 
+        peak: if (Config.debug_printing.print_memory_usage) usize else void,
+
         pub fn init(gpa: std.mem.Allocator, capacity: usize) !Self {
             const items = try gpa.alloc(Optional, capacity);
             blockInit(items);
@@ -207,6 +209,7 @@ pub fn ObjPool(comptime T: type) type {
                 .capacity = capacity,
                 .free_list = @ptrCast(@alignCast(items)),
                 .free_count = capacity,
+                .peak = if (Config.debug_printing.print_memory_usage) 0 else {},
             };
         }
 
@@ -229,6 +232,10 @@ pub fn ObjPool(comptime T: type) type {
             const current_ptr = self.free_list orelse return error.OutOfMemory;
             self.free_list = current_ptr.*.ptr;
             self.free_count -= 1;
+            if (Config.debug_printing.print_memory_usage) {
+                const used = self.capacity - self.free_count;
+                self.peak = @max(self.peak, used);
+            }
             return @ptrCast(current_ptr);
         }
 
@@ -243,14 +250,18 @@ pub fn ObjPool(comptime T: type) type {
         }
 
         fn printUsage(ctx: *anyopaque) void {
-            const self: *Self = @ptrCast(@alignCast(ctx));
-            const used = self.items.len - self.free_count;
-            std.debug.print("Heap({s}): {} used, {} free, sizeOf(T) = {}\n", .{
-                @typeName(T),
-                used,
-                self.free_count,
-                @sizeOf(T),
-            });
+            if (Config.debug_printing.print_memory_usage) {
+                const self: *Self = @ptrCast(@alignCast(ctx));
+                const used = self.items.len - self.free_count;
+                std.debug.print("Heap({s}): {} used, {} free, {} peak, sizeOf(T) = {}\n", .{
+                    @typeName(T),
+                    used,
+                    self.free_count,
+                    self.peak,
+                    @sizeOf(T),
+                });
+                self.peak = 0;
+            }
         }
 
         fn blockInit(items: []Optional) void {
