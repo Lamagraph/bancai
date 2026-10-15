@@ -171,8 +171,8 @@ test "LockedEquationFetcher: wraps push/pushUrgent/fetch through to the inner fe
 
     try std.testing.expect(fetcher.fetch() == null);
 
-    var lagent = Types.Agent{ .id = 1, .ports = @splat(null) };
-    var ragent = Types.Agent{ .id = 2, .ports = @splat(null) };
+    var lagent = Types.Agent{ .id = 1, .ports = @splat(undefined) };
+    var ragent = Types.Agent{ .id = 2, .ports = @splat(undefined) };
     const eq = Equation{ .lhs = &lagent, .rhs = &ragent };
 
     try fetcher.push(eq);
@@ -200,8 +200,8 @@ test "LockedEquationFetcher: getUser hands back a working copy of the fetcher" {
     const fetcher = locked.getUser();
     try std.testing.expect(fetcher.fetch() == null);
 
-    var lagent = Types.Agent{ .id = 1, .ports = @splat(null) };
-    var ragent = Types.Agent{ .id = 2, .ports = @splat(null) };
+    var lagent = Types.Agent{ .id = 1, .ports = @splat(undefined) };
+    var ragent = Types.Agent{ .id = 2, .ports = @splat(undefined) };
     const eq = Equation{ .lhs = &lagent, .rhs = &ragent };
 
     try fetcher.push(eq);

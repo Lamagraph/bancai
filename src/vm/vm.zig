@@ -493,6 +493,9 @@ inline fn execActivePair(self: *Self, mode: Core.CoreMode) !void {
     if (BuildConfig.debug_printing.print_memory_usage) {
         self.global_ctx.agent_heap.printUsage();
         self.global_ctx.name_heap.printUsage();
+        if (BuildConfig.heap == .basic) {
+            self.global_ctx.agent_heap.printAgentStructure(self.runtime);
+        }
     }
 }
 
