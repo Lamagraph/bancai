@@ -7,7 +7,7 @@ Add(r, x) >< S(y) =>
    Add(w, x) ~ y;
 
 x ~ S(S(S(Z())));
-x ~ Dup(x1, x2);
+x ~ DupRef(x1, x2);
 
 
 Add(r1, S(Z())) ~ x1;
