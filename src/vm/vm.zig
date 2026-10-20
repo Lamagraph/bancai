@@ -502,7 +502,7 @@ inline fn execActivePair(self: *Self, mode: Core.CoreMode) !void {
         self.global_ctx.agent_heap.printUsage();
         self.global_ctx.name_heap.printUsage();
         if (BuildConfig.heap == .basic) {
-            try self.profiler.printAgentStructure(self.runtime, self.global_ctx.agent_heap);
+            self.profiler.printAgentStructure(self.runtime, self.global_ctx.agent_heap);
         }
     }
 }

@@ -123,7 +123,7 @@ pub fn evalEquation(c: *Core, eq: Equation) !void {
 
         if (Config.debug_printing.print_memory_usage) {
             if (c.profiler.shouldPrintAgentStructure()) {
-                try c.profiler.printAgentStructure(c.runtime, c.local_ctx.agent_heap);
+                c.profiler.printAgentStructure(c.runtime, c.local_ctx.agent_heap);
                 c.profiler.incProfiling();
             }
         }

@@ -37,7 +37,7 @@ pub fn shouldPrintAgentStructure(self: *const Self) bool {
     }
 }
 
-pub fn printAgentStructure(self: *const Self, runtime: *const Runtime, agent_heap: Heap(Agent)) !void {
+pub fn printAgentStructure(self: *const Self, runtime: *const Runtime, agent_heap: Heap(Agent)) void {
     std.debug.print("Profiling data {} time over {} interactions\n", .{ self.profiling_cnt, self.interactions_count });
 
     const max_ids = 1024;
