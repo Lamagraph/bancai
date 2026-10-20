@@ -4,8 +4,13 @@ const Io = std.Io;
 const AST = @import("ast");
 const SharedRuntime = @import("shared_runtime");
 const VM = @import("vm");
+const Config = @import("config");
 
 const clap = @import("clap");
+
+const profile_heap_structure = Config.heap == .basic and Config.debug_printing.benchmark and Config.debug_printing.print_memory_usage;
+
+const interaction_profiler = if (profile_heap_structure) "--profiling-window <usize>     Specify window between profiling prints." else "";
 
 const help =
     \\-h, --help                     Display this help and exit.
@@ -14,7 +19,7 @@ const help =
     \\-f, --filepath <str>           Specify file to be interpreted. Default: ./tests/list_sorting.in
     \\-w, --warmup                   In multiThread mode, have the master core take a first pass at reducing equations before handing off to the worker cores.
     \\
-;
+++ interaction_profiler ++ "\n";
 const params = clap.parseParamsComptime(help);
 
 const DEFAULT_HEAP_SIZE: usize = 1024;
@@ -49,6 +54,12 @@ pub fn main(init: std.process.Init) !void {
     const filepath = res.args.filepath orelse {
         std.debug.print("File not specified. \nConsider using \"--help\".\n", .{});
         std.process.exit(1);
+    };
+
+    const profiling_window: ?usize = profiling_window: {
+        if (profile_heap_structure) {
+            break :profiling_window res.args.@"profiling-window";
+        } else break :profiling_window null;
     };
 
     const contents = try Io.Dir.readFileAllocOptions(
@@ -92,7 +103,9 @@ pub fn main(init: std.process.Init) !void {
         .warmup = res.args.warmup != 0,
     };
 
-    var vm = try VM.init(&runtime, vm_cfg);
+    var vm_profiler: VM.Profiler = .init(profiling_window);
+
+    var vm = try VM.init(&runtime, vm_cfg, &vm_profiler);
     defer vm.deinit();
 
     vm.runProgram(program) catch |err| {

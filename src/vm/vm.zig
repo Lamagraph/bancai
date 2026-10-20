@@ -22,7 +22,9 @@ pub const CoreMasterCtrl = @import("core_master_ctrl.zig");
 pub const CoreSlaveCtrl = @import("core_slave_ctrl.zig");
 pub const Importer = @import("importer.zig");
 pub const Interaction = @import("interactions.zig");
+pub const Profiler = @import("profiler.zig");
 const Normalize = @import("normalize.zig");
+
 pub const normalizeEquation = Normalize.normalizeEquation;
 
 const VM = @This();
@@ -31,6 +33,7 @@ const Self = VM;
 const getUser = "getUser";
 
 config: Config,
+profiler: *Profiler,
 
 global_ctx: GlobalCtx,
 runtime: *Runtime,
@@ -212,6 +215,7 @@ fn createSlaveCores(
     global_ctx: GlobalCtx,
     core_num: usize,
     slave_ctrl: *CoreSlaveCtrl,
+    profiler: *Profiler,
 ) ![]Core {
     const cores: []Core = try runtime.gpa.alloc(Core, core_num);
     errdefer runtime.gpa.free(cores);
@@ -224,6 +228,7 @@ fn createSlaveCores(
             runtime,
             Core.CoreCtrl{ .slave = slave_ctrl },
             global_ctx.createLocal(runtime.gpa),
+            profiler,
         );
 
         available_core_id += 1;
@@ -239,7 +244,7 @@ pub fn deinit(self: *Self) void {
     if (self.master_ctrl) |master_ctrl| self.runtime.gpa.destroy(master_ctrl);
 }
 
-pub fn init(runtime: *Runtime, config: Config) !Self {
+pub fn init(runtime: *Runtime, config: Config, profiler: *Profiler) !Self {
     try config.isValid();
 
     const mode: Core.CoreMode = if (config.cores_num == 1) .singleThread else .multiThread;
@@ -264,6 +269,7 @@ pub fn init(runtime: *Runtime, config: Config) !Self {
                 runtime,
                 null,
                 try global_ctx.createVmLocal(),
+                profiler,
             );
         },
         .multiThread => {
@@ -278,6 +284,7 @@ pub fn init(runtime: *Runtime, config: Config) !Self {
                 runtime,
                 Core.CoreCtrl{ .master = created_master_ctrl },
                 try global_ctx.createVmLocal(),
+                profiler,
             );
 
             const created_slave_ctrl = try runtime.gpa.create(CoreSlaveCtrl);
@@ -285,7 +292,7 @@ pub fn init(runtime: *Runtime, config: Config) !Self {
             created_slave_ctrl.* = CoreSlaveCtrl.init();
             slave_ctrl = created_slave_ctrl;
 
-            cores = try createSlaveCores(runtime, global_ctx, config.cores_num, created_slave_ctrl);
+            cores = try createSlaveCores(runtime, global_ctx, config.cores_num, created_slave_ctrl, profiler);
             errdefer destroySlaveCores(cores, &global_ctx, runtime);
         },
     }
@@ -298,6 +305,7 @@ pub fn init(runtime: *Runtime, config: Config) !Self {
         .global_ctx = global_ctx,
         .runtime = runtime,
         .config = config,
+        .profiler = profiler,
     };
 }
 
@@ -485,7 +493,7 @@ inline fn execActivePair(self: *Self, mode: Core.CoreMode) !void {
         const end = std.Io.Clock.awake.now(self.runtime.io);
 
         const duration = start.durationTo(end);
-        std.debug.print("Time passed: {}s\n", .{@as(f64, @floatFromInt(duration.toMilliseconds())) / 1000.0});
+        std.debug.print("{: >9} interactions in {}s\n", .{ self.profiler.interactions_count, @as(f64, @floatFromInt(duration.toMilliseconds())) / 1000.0 });
     } else {
         try self.execActivePairMode(mode);
     }
@@ -509,6 +517,7 @@ pub fn runProgram(self: *Self, program: AST.Program) !void {
             .active_pair => |ap| {
                 try self.prepareActivePair(ap);
                 try self.execActivePair(self.vm_core.mode);
+                self.profiler.resetInteractions();
             },
             else => unreachable,
         }

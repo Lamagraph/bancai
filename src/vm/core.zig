@@ -7,6 +7,7 @@ const std = @import("std");
 pub const Builtin = @import("builtin.zig");
 pub const Interaction = @import("interactions.zig");
 pub const Importer = @import("importer.zig");
+const Profiler = @import("profiler.zig");
 
 const Runtime = @import("shared_runtime");
 const Types = Runtime.Types;
@@ -39,6 +40,8 @@ mode: CoreMode,
 // that mutates it (rule registration, imports, associated_names) lives in
 // VM's statement handling now, so this can be const.
 runtime: *const Runtime,
+
+profiler: *Profiler,
 
 core_ctrl: ?CoreCtrl,
 local_ctx: LocalCtx,
@@ -136,6 +139,7 @@ pub fn init(
     runtime: *const Runtime,
     core_ctrl: ?CoreCtrl,
     local_ctx: LocalCtx,
+    profiler: *Profiler,
 ) Self {
     return .{
         .id = core_id,
@@ -143,6 +147,7 @@ pub fn init(
         .runtime = runtime,
         .core_ctrl = core_ctrl,
         .local_ctx = local_ctx,
+        .profiler = profiler,
 
         // They are not meant to be used when undefiend by the design of compilation.
         .registers = @splat(undefined),
