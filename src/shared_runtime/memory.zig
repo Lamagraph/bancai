@@ -6,6 +6,15 @@ const Types = @import("types.zig");
 
 pub const HeapKind = enum { basic, objpool };
 
+pub const AgentCount = struct {
+    id: Types.Agent.Id,
+    cnt: usize,
+
+    pub fn lessThan(_: void, a: AgentCount, b: AgentCount) bool {
+        return a.cnt < b.cnt;
+    }
+};
+
 pub fn Heap(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -18,7 +27,7 @@ pub fn Heap(comptime T: type) type {
             allocOne: *const fn (*anyopaque) Error!*T,
             freeOne: *const fn (*anyopaque, elem: *T) void,
             printUsage: *const fn (*anyopaque) void,
-            printAgentStructure: ?*const fn (*anyopaque, *const Runtime) void,
+            getAgentStructure: ?*const fn (*anyopaque, []AgentCount) u32,
         };
 
         pub inline fn allocOne(self: Self) Error!*T {
@@ -33,8 +42,9 @@ pub fn Heap(comptime T: type) type {
             self.vtable.printUsage(self.ptr);
         }
 
-        pub inline fn printAgentStructure(self: Self, runtime: *const Runtime) void {
-            self.vtable.printAgentStructure.?(self.ptr, runtime);
+        /// Returns the number of different agents.
+        pub inline fn getAgentStructure(self: Self, structure_data: []AgentCount) u32 {
+            return self.vtable.getAgentStructure.?(self.ptr, structure_data);
         }
     };
 }
@@ -54,7 +64,7 @@ pub fn LockedHeap(comptime T: type) type {
             .allocOne = allocOne,
             .freeOne = freeOne,
             .printUsage = printUsage,
-            .printAgentStructure = null,
+            .getAgentStructure = null,
         };
 
         pub fn heap(self: *Self) Heap(T) {
@@ -134,7 +144,7 @@ pub fn BasicHeap(comptime T: type) type {
             .allocOne = allocOne,
             .freeOne = freeOne,
             .printUsage = printUsage,
-            .printAgentStructure = if (T == Types.Agent) printAgentStructure else null,
+            .getAgentStructure = if (T == Types.Agent) getAgentStructure else null,
         };
 
         pub fn heap(self: *Self) Heap(T) {
@@ -199,7 +209,7 @@ pub fn BasicHeap(comptime T: type) type {
             }
         }
 
-        fn printAgentStructure(ctx: *anyopaque, runtime: *const Runtime) void {
+        fn getAgentStructure(ctx: *anyopaque, agent_structure: []AgentCount) u32 {
             const self: *Self = @ptrCast(@alignCast(ctx));
             if (T != Types.Agent) {
                 @compileError("Only works for agent heaps");
@@ -208,6 +218,7 @@ pub fn BasicHeap(comptime T: type) type {
             const max_id = 1024;
 
             var agent_structure_list: [max_id]usize = undefined;
+
             @memset(&agent_structure_list, 0);
 
             for (self.items) |maybe_item| {
@@ -219,11 +230,16 @@ pub fn BasicHeap(comptime T: type) type {
                 }
             }
 
+            var id_idx: u32 = 0;
+
             for (0..max_id) |agent_id| {
                 if (agent_structure_list[agent_id] != 0) {
-                    std.debug.print("#{:0>4} {s: >20}:{: >10}\n", .{ agent_id, runtime.getAgentName(@intCast(agent_id)).?, agent_structure_list[agent_id] });
+                    agent_structure[id_idx] = .{ .cnt = agent_structure_list[agent_id], .id = @intCast(agent_id) };
+                    id_idx += 1;
                 }
             }
+
+            return id_idx;
         }
     };
 }
@@ -263,7 +279,7 @@ pub fn ObjPool(comptime T: type) type {
             .allocOne = allocOne,
             .freeOne = freeOne,
             .printUsage = printUsage,
-            .printAgentStructure = null,
+            .getAgentStructure = null,
         };
 
         pub fn heap(self: *Self) Heap(T) {
