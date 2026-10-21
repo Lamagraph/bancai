@@ -6,7 +6,7 @@ Interaction nets is a computational model with some restrictions, that allow for
 
 ## How to run
 
-Install zig compiler v0.16, then it's simple:
+Install zig compiler v0.17, then it's simple:
 
 ```
 $ zig build
