@@ -196,6 +196,10 @@ pub const GlobalCtx = struct {
         try Normalize.pushEquation(self.name_heap, self.equation_fetcher, eq);
     }
 
+    pub fn pushEquationNormalized(self: GlobalCtx, eq: Types.Equation) !void {
+        try self.equation_fetcher.push(eq);
+    }
+
     pub fn pushUrgentEquation(self: GlobalCtx, eq: EquationUnnormalized) !void {
         try Normalize.pushUrgentEquation(self.name_heap, self.equation_fetcher, eq);
     }
@@ -453,12 +457,19 @@ inline fn ruleStmt(self: *Self, rule: AST.Rule) !void {
     }
 }
 
-inline fn prepareActivePair(self: *Self, ap: AST.ActivePair) !void {
+inline fn prepareActivePair(self: *Self, ap: AST.ActivePair) !?Profiler.Interaction {
     const lhs = try self.objToValue(ap.lhs.val);
     const rhs = try self.objToValue(ap.rhs.val);
     const eq = EquationUnnormalized{ .lhs = lhs, .rhs = rhs };
 
-    try self.global_ctx.pushEquation(eq);
+    const normalized = try Normalize.normalizeEquation(self.global_ctx.name_heap, eq) orelse return null;
+
+    try self.global_ctx.pushEquationNormalized(normalized);
+
+    return .{
+        .lhs = normalized.lhs.id,
+        .rhs = normalized.rhs.id,
+    };
 }
 
 inline fn execActivePairVmCore(self: *Self) !void {
@@ -487,24 +498,7 @@ inline fn execActivePairMode(self: *Self, mode: Core.CoreMode) !void {
 }
 
 inline fn execActivePair(self: *Self, mode: Core.CoreMode) !void {
-    if (BuildConfig.debug_printing.benchmark) {
-        const start = std.Io.Clock.awake.now(self.runtime.io);
-        try self.execActivePairMode(mode);
-        const end = std.Io.Clock.awake.now(self.runtime.io);
-
-        const duration = start.durationTo(end);
-        std.debug.print("{: >9} interactions in {}s\n", .{ self.profiler.interactions_count, @as(f64, @floatFromInt(duration.toMilliseconds())) / 1000.0 });
-    } else {
-        try self.execActivePairMode(mode);
-    }
-
-    if (BuildConfig.debug_printing.print_memory_usage) {
-        self.global_ctx.agent_heap.printUsage();
-        self.global_ctx.name_heap.printUsage();
-        if (BuildConfig.heap == .basic) {
-            self.profiler.printAgentStructure(self.runtime, self.global_ctx.agent_heap);
-        }
-    }
+    try self.execActivePairMode(mode);
 }
 
 pub fn runProgram(self: *Self, program: AST.Program) !void {
@@ -515,9 +509,10 @@ pub fn runProgram(self: *Self, program: AST.Program) !void {
             .use_stmt => |import_path| try self.useStmt(import_path),
             .rule => |rule| try self.ruleStmt(rule),
             .active_pair => |ap| {
-                try self.prepareActivePair(ap);
+                const interaction = try self.prepareActivePair(ap) orelse continue;
+                self.profiler.startInteraction(interaction);
                 try self.execActivePair(self.vm_core.mode);
-                self.profiler.resetInteractions();
+                self.profiler.endInteraction();
             },
             else => unreachable,
         }

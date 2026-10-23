@@ -122,9 +122,8 @@ pub fn evalEquation(c: *Core, eq: Equation) !void {
         c.profiler.incInteraction();
 
         if (Config.debug_printing.print_memory_usage) {
-            if (c.profiler.shouldPrintAgentStructure()) {
-                c.profiler.printAgentStructure(c.runtime, c.local_ctx.agent_heap);
-                c.profiler.incProfiling();
+            if (c.profiler.shouldGetAgentStructure()) {
+                try c.profiler.collectAgentStructure(c.local_ctx.agent_heap);
             }
         }
     }

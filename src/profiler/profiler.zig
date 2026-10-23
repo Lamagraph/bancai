@@ -6,6 +6,8 @@ const std = @import("std");
 
 pub const Printing = @import("printing.zig");
 
+const Config = @import("config");
+
 const Runtime = @import("shared_runtime");
 const Memory = Runtime.Memory;
 const Heap = Memory.Heap;
@@ -13,13 +15,117 @@ const Heap = Memory.Heap;
 const Agent = Runtime.Types.Agent;
 const AgentCount = Memory.AgentCount;
 
-interactions_count: usize,
-profiling_window: ?usize,
-profiling_cnt: usize,
+const profile_memory = Config.heap == .basic and Config.debug_printing.benchmark and Config.debug_printing.print_memory_usage;
+
+pub const Interaction = struct {
+    lhs: Agent.Id,
+    rhs: Agent.Id,
+};
+
+const Timer = struct {
+    st: std.Io.Timestamp,
+    io: std.Io,
+
+    fn start(self: *Timer) void {
+        self.st = std.Io.Clock.awake.now(self.io);
+    }
+
+    fn stop(self: *Timer) std.Io.Duration {
+        const end = std.Io.Clock.awake.now(self.io);
+        return self.st.durationTo(end);
+    }
+
+    fn init(io: std.Io) Timer {
+        return .{
+            .io = io,
+            .st = undefined,
+        };
+    }
+};
+
+const RunResult = struct {
+    elapsed_time: f64,
+    interaction_count: u64,
+
+    fn debugPrint(self: RunResult) void {
+        std.debug.print("{} interaction{s} in {}s\n", .{
+            self.interaction_count,
+            if (self.interaction_count != 1) "s" else "",
+            self.elapsed_time,
+        });
+    }
+};
+
+const ProfilingSingle = struct {
+    interaction_count: u64,
+    agent_count_list: []AgentCount,
+
+    fn debugPrint(self: ProfilingSingle, runtime: *const Runtime) void {
+        std.debug.print("Profiling data after {} interactions\n", .{self.interaction_count});
+
+        for (0..self.agent_count_list.len) |agent_idx| {
+            const agent_id = self.agent_count_list[agent_idx].id;
+            const agent_cnt = self.agent_count_list[agent_idx].cnt;
+            const name = runtime.getAgentName(agent_id).?;
+
+            std.debug.print("#{:0>4} - {s: >15} {: >9}\n", .{ agent_id, name, agent_cnt });
+        }
+
+        std.debug.print("\n", .{});
+    }
+};
+
+const ProfilingResult = struct {
+    profiling_invocations: []ProfilingSingle,
+
+    fn debugPrint(self: ProfilingResult, runtime: *const Runtime) void {
+        for (self.profiling_invocations) |invocation| {
+            invocation.debugPrint(runtime);
+        }
+    }
+};
+
+const Statement = struct {
+    interaction: Interaction,
+    duration: ?std.Io.Duration,
+    profiling_invocations: ?std.ArrayList(ProfilingSingle),
+
+    fn debugPrint(self: Statement, runtime: *const Runtime) void {
+        std.debug.print("analyzed data for ({s} ~ {s}) begin\n", .{
+            runtime.getAgentName(self.interaction.lhs).?,
+            runtime.getAgentName(self.interaction.rhs).?,
+        });
+    }
+
+    fn reset(self: *Statement, gpa: std.mem.Allocator) void {
+        if (self.profiling_invocations) |*invocations| {
+            for (invocations.items) |data| {
+                gpa.free(data.agent_count_list);
+            }
+            invocations.clearRetainingCapacity();
+        }
+    }
+
+    fn deinit(self: *Statement, gpa: std.mem.Allocator) void {
+        if (self.profiling_invocations) |*invocations| {
+            invocations.clearAndFree(gpa);
+        }
+    }
+};
+
+interaction_count: u64,
+profiling_window: ?u64,
+profiling_cnt: u64,
+stmt_cnt: u32,
+
+current_statement: Statement,
+timer: Timer,
+
+runtime: *const Runtime,
 
 pub fn incInteraction(self: *Self) void {
     // very atomic operation.
-    self.interactions_count += 1;
+    self.interaction_count += 1;
 }
 
 pub fn incProfiling(self: *Self) void {
@@ -27,45 +133,97 @@ pub fn incProfiling(self: *Self) void {
 }
 
 pub fn resetInteractions(self: *Self) void {
-    self.interactions_count = 0;
+    self.interaction_count = 0;
     self.profiling_cnt = 0;
 }
 
-pub fn shouldPrintAgentStructure(self: *const Self) bool {
+pub fn shouldGetAgentStructure(self: *const Self) bool {
     if (self.profiling_window) |profiling_window| {
-        return self.interactions_count % profiling_window == 0 and self.interactions_count != 0;
+        return self.interaction_count % profiling_window == 0 and self.interaction_count != 0;
     } else {
         return false;
     }
 }
 
-pub fn printAgentStructure(self: *const Self, runtime: *const Runtime, agent_heap: Heap(Agent)) void {
-    std.debug.print("Profiling data {} time over {} interactions\n", .{ self.profiling_cnt, self.interactions_count });
+pub fn collectAgentStructure(self: *Self, agent_heap: Heap(Agent)) !void {
+    const invocations = &(self.current_statement.profiling_invocations.?);
 
-    const max_ids = 1024;
-    var structure_data_arr: [max_ids]AgentCount = undefined;
+    const max_agent_id = 512;
+    var agent_count_lst: [max_agent_id]AgentCount = undefined;
 
-    const ids_count = agent_heap.getAgentStructure(&structure_data_arr);
+    const ids_count = agent_heap.getAgentStructure(&agent_count_lst);
 
-    std.mem.sort(AgentCount, structure_data_arr[0..ids_count], {}, AgentCount.lessThan);
+    const data: ProfilingSingle = .{
+        .interaction_count = self.interaction_count,
+        .agent_count_list = try self.runtime.gpa.dupe(AgentCount, agent_count_lst[0..ids_count]),
+    };
 
-    for (0..ids_count) |agent_idx| {
-        const agent_id = structure_data_arr[agent_idx].id;
-        const agent_cnt = structure_data_arr[agent_idx].cnt;
-        const name = runtime.getAgentName(agent_id).?;
-
-        std.debug.print("#{:0>4} - {s: >15} {: >9}\n", .{ agent_id, name, agent_cnt });
-    }
-
-    std.debug.print("\n", .{});
+    try invocations.append(self.runtime.gpa, data);
 }
 
-pub fn init(profiling_window: ?usize) Self {
+pub fn startInteraction(self: *Self, interaction: Interaction) void {
+    self.current_statement = .{
+        .interaction = interaction,
+        .duration = null,
+        .profiling_invocations = null,
+    };
+    if (profile_memory) {
+        self.current_statement.profiling_invocations = .empty;
+    }
+    if (Config.debug_printing.benchmark) {
+        self.timer.start();
+    }
+}
+
+pub fn endInteraction(self: *Self) void {
+    if (Config.debug_printing.benchmark) {
+        self.current_statement.duration = self.timer.stop();
+    }
+
+    self.analyzeStatement(self.current_statement);
+
+    self.current_statement.reset(self.runtime.gpa);
+
+    self.resetInteractions();
+
+    self.stmt_cnt += 1;
+}
+
+fn analyzeStatement(self: *Self, stmt: Statement) void {
+    if (Config.debug_printing.benchmark) {
+        stmt.debugPrint(self.runtime);
+        const run: RunResult = .{
+            .interaction_count = self.interaction_count,
+            .elapsed_time = @as(f64, @floatFromInt(stmt.duration.?.toMicroseconds())) / 1e6,
+        };
+        run.debugPrint();
+
+        if (profile_memory) {
+            const invocations = stmt.profiling_invocations.?;
+
+            const profiling_result: ProfilingResult = .{ .profiling_invocations = invocations.items };
+
+            profiling_result.debugPrint(self.runtime);
+        }
+        std.debug.print("end.\n\n", .{});
+    }
+}
+
+pub fn init(runtime: *const Runtime, profiling_window: ?u64) Self {
     return .{
-        .interactions_count = 0,
+        .interaction_count = 0,
         .profiling_window = profiling_window,
         .profiling_cnt = 0,
+        .stmt_cnt = 0,
+
+        .current_statement = undefined,
+        .runtime = runtime,
+        .timer = .init(runtime.io),
     };
+}
+
+pub fn deinit(self: *Self) void {
+    self.current_statement.deinit(self.runtime.gpa);
 }
 
 test {

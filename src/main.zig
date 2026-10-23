@@ -104,7 +104,8 @@ pub fn main(init: std.process.Init) !void {
         .warmup = res.args.warmup != 0,
     };
 
-    var vm_profiler: Profiler = .init(profiling_window);
+    var vm_profiler: Profiler = .init(&runtime, profiling_window);
+    defer vm_profiler.deinit();
 
     var vm = try VM.init(&runtime, vm_cfg, &vm_profiler);
     defer vm.deinit();
