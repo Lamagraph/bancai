@@ -1,8 +1,19 @@
 const std = @import("std");
 
 const Config = @import("config");
+const Runtime = @import("runtime.zig");
+const Types = @import("types.zig");
 
 pub const HeapKind = enum { basic, objpool };
+
+pub const AgentCount = struct {
+    id: Types.Agent.Id,
+    cnt: usize,
+
+    pub fn lessThan(_: void, a: AgentCount, b: AgentCount) bool {
+        return a.cnt < b.cnt;
+    }
+};
 
 pub fn Heap(comptime T: type) type {
     return struct {
@@ -16,6 +27,7 @@ pub fn Heap(comptime T: type) type {
             allocOne: *const fn (*anyopaque) Error!*T,
             freeOne: *const fn (*anyopaque, elem: *T) void,
             printUsage: *const fn (*anyopaque) void,
+            getAgentStructure: ?*const fn (*anyopaque, []AgentCount) u32,
         };
 
         pub inline fn allocOne(self: Self) Error!*T {
@@ -28,6 +40,11 @@ pub fn Heap(comptime T: type) type {
 
         pub inline fn printUsage(self: Self) void {
             self.vtable.printUsage(self.ptr);
+        }
+
+        /// Returns the number of different agents.
+        pub inline fn getAgentStructure(self: Self, structure_data: []AgentCount) u32 {
+            return self.vtable.getAgentStructure.?(self.ptr, structure_data);
         }
     };
 }
@@ -47,6 +64,7 @@ pub fn LockedHeap(comptime T: type) type {
             .allocOne = allocOne,
             .freeOne = freeOne,
             .printUsage = printUsage,
+            .getAgentStructure = null,
         };
 
         pub fn heap(self: *Self) Heap(T) {
@@ -103,6 +121,8 @@ pub fn BasicHeap(comptime T: type) type {
         items: []Optional,
         free_idx: usize,
         capacity: usize,
+        free_count: usize,
+        peak: if (Config.debug_printing.print_memory_usage) usize else void,
 
         pub fn init(gpa: std.mem.Allocator, capacity: usize) !Self {
             const items = try gpa.alloc(Optional, capacity);
@@ -111,6 +131,8 @@ pub fn BasicHeap(comptime T: type) type {
                 .items = items,
                 .capacity = capacity,
                 .free_idx = 0,
+                .free_count = capacity,
+                .peak = if (Config.debug_printing.print_memory_usage) 0 else {},
             };
         }
 
@@ -122,6 +144,7 @@ pub fn BasicHeap(comptime T: type) type {
             .allocOne = allocOne,
             .freeOne = freeOne,
             .printUsage = printUsage,
+            .getAgentStructure = if (T == Types.Agent) getAgentStructure else null,
         };
 
         pub fn heap(self: *Self) Heap(T) {
@@ -134,6 +157,11 @@ pub fn BasicHeap(comptime T: type) type {
             if (self.findFree()) |idx| {
                 self.free_idx = idx;
                 self.items[idx] = .{ .item = undefined };
+                self.free_count -= 1;
+                if (Config.debug_printing.print_memory_usage) {
+                    const used = self.capacity - self.free_count;
+                    self.peak = @max(self.peak, used);
+                }
 
                 return &self.items[idx].item;
             }
@@ -152,7 +180,7 @@ pub fn BasicHeap(comptime T: type) type {
         }
 
         fn freeOne(ctx: *anyopaque, elem: *T) void {
-            _ = ctx;
+            const self: *Self = @ptrCast(@alignCast(ctx));
 
             const real_elem: *Optional = @fieldParentPtr("item", elem);
 
@@ -162,26 +190,56 @@ pub fn BasicHeap(comptime T: type) type {
             }
 
             real_elem.* = .free;
+            self.free_count += 1;
         }
 
         fn printUsage(ctx: *anyopaque) void {
-            const self: *Self = @ptrCast(@alignCast(ctx));
+            if (Config.debug_printing.print_memory_usage) {
+                const self: *Self = @ptrCast(@alignCast(ctx));
+                const used = self.items.len - self.free_count;
+                std.debug.print("Heap({s}): {} used, {} free, {} peak, sizeOf(T) = {}, sizeOf(Optional) = {}\n", .{
+                    @typeName(T),
+                    used,
+                    self.free_count,
+                    self.peak,
+                    @sizeOf(T),
+                    @sizeOf(Optional),
+                });
+                self.peak = 0;
+            }
+        }
 
-            var used: usize = 0;
-            for (self.items) |maybe_elem| {
-                if (maybe_elem == .item) {
-                    used += 1;
+        fn getAgentStructure(ctx: *anyopaque, agent_structure: []AgentCount) u32 {
+            const self: *Self = @ptrCast(@alignCast(ctx));
+            if (T != Types.Agent) {
+                @compileError("Only works for agent heaps");
+            }
+
+            const max_id = 1024;
+
+            var agent_structure_list: [max_id]usize = undefined;
+
+            @memset(&agent_structure_list, 0);
+
+            for (self.items) |maybe_item| {
+                switch (maybe_item) {
+                    .item => |agent| {
+                        agent_structure_list[agent.id] += 1;
+                    },
+                    .free => {},
                 }
             }
 
-            const free = self.items.len - used;
-            std.debug.print("Heap({s}): {} used, {} free, sizeOf(Optional) = {}, sizeOf(T) = {}\n", .{
-                @typeName(T),
-                used,
-                free,
-                @sizeOf(Optional),
-                @sizeOf(T),
-            });
+            var id_idx: u32 = 0;
+
+            for (0..max_id) |agent_id| {
+                if (agent_structure_list[agent_id] != 0) {
+                    agent_structure[id_idx] = .{ .cnt = agent_structure_list[agent_id], .id = @intCast(agent_id) };
+                    id_idx += 1;
+                }
+            }
+
+            return id_idx;
         }
     };
 }
@@ -199,6 +257,8 @@ pub fn ObjPool(comptime T: type) type {
         free_list: ?*Optional,
         free_count: usize,
 
+        peak: if (Config.debug_printing.print_memory_usage) usize else void,
+
         pub fn init(gpa: std.mem.Allocator, capacity: usize) !Self {
             const items = try gpa.alloc(Optional, capacity);
             blockInit(items);
@@ -207,6 +267,7 @@ pub fn ObjPool(comptime T: type) type {
                 .capacity = capacity,
                 .free_list = @ptrCast(@alignCast(items)),
                 .free_count = capacity,
+                .peak = if (Config.debug_printing.print_memory_usage) 0 else {},
             };
         }
 
@@ -218,6 +279,7 @@ pub fn ObjPool(comptime T: type) type {
             .allocOne = allocOne,
             .freeOne = freeOne,
             .printUsage = printUsage,
+            .getAgentStructure = null,
         };
 
         pub fn heap(self: *Self) Heap(T) {
@@ -229,6 +291,10 @@ pub fn ObjPool(comptime T: type) type {
             const current_ptr = self.free_list orelse return error.OutOfMemory;
             self.free_list = current_ptr.*.ptr;
             self.free_count -= 1;
+            if (Config.debug_printing.print_memory_usage) {
+                const used = self.capacity - self.free_count;
+                self.peak = @max(self.peak, used);
+            }
             return @ptrCast(current_ptr);
         }
 
@@ -243,14 +309,18 @@ pub fn ObjPool(comptime T: type) type {
         }
 
         fn printUsage(ctx: *anyopaque) void {
-            const self: *Self = @ptrCast(@alignCast(ctx));
-            const used = self.items.len - self.free_count;
-            std.debug.print("Heap({s}): {} used, {} free, sizeOf(T) = {}\n", .{
-                @typeName(T),
-                used,
-                self.free_count,
-                @sizeOf(T),
-            });
+            if (Config.debug_printing.print_memory_usage) {
+                const self: *Self = @ptrCast(@alignCast(ctx));
+                const used = self.items.len - self.free_count;
+                std.debug.print("Heap({s}): {} used, {} free, {} peak, sizeOf(T) = {}\n", .{
+                    @typeName(T),
+                    used,
+                    self.free_count,
+                    self.peak,
+                    @sizeOf(T),
+                });
+                self.peak = 0;
+            }
         }
 
         fn blockInit(items: []Optional) void {

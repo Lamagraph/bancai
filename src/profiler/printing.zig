@@ -64,7 +64,9 @@ pub const Lines = struct {
     /// Caller owns the string.
     pub fn getEnumerated(self: *const Lines, arena: std.mem.Allocator, idx: usize) ![]const u8 {
         // self.enumeration_padding = 4 + "| ".len
-        return std.fmt.allocPrint(arena, "{: >4}| {s}", .{ idx + 1, self.lines[idx] });
+        const padding_n = 4;
+        const padding_s = std.fmt.comptimePrint("{}", .{padding_n});
+        return std.fmt.allocPrint(arena, "{: >" ++ padding_s ++ "}| {s}", .{ idx + 1, self.lines[idx] });
     }
 
     pub fn deinit(self: *Lines) void {
