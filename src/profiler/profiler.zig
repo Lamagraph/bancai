@@ -4,6 +4,8 @@ const Self = @This();
 
 const std = @import("std");
 
+pub const Printing = @import("printing.zig");
+
 const Runtime = @import("shared_runtime");
 const Memory = Runtime.Memory;
 const Heap = Memory.Heap;
@@ -63,5 +65,11 @@ pub fn init(profiling_window: ?usize) Self {
         .interactions_count = 0,
         .profiling_window = profiling_window,
         .profiling_cnt = 0,
+    };
+}
+
+test {
+    _ = .{
+        Printing,
     };
 }

@@ -4,6 +4,7 @@ const Io = std.Io;
 const AST = @import("ast");
 const SharedRuntime = @import("shared_runtime");
 const VM = @import("vm");
+const Profiler = @import("profiler");
 const Config = @import("config");
 
 const clap = @import("clap");
@@ -103,7 +104,7 @@ pub fn main(init: std.process.Init) !void {
         .warmup = res.args.warmup != 0,
     };
 
-    var vm_profiler: VM.Profiler = .init(profiling_window);
+    var vm_profiler: Profiler = .init(profiling_window);
 
     var vm = try VM.init(&runtime, vm_cfg, &vm_profiler);
     defer vm.deinit();
@@ -122,7 +123,7 @@ test "test modules" {
         AST,
         SharedRuntime,
         @import("compilation"),
-        @import("printing"),
+        Profiler,
         VM,
     };
 }

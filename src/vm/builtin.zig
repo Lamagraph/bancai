@@ -2,7 +2,6 @@
 const std = @import("std");
 const Core = @import("core.zig");
 const Types = @import("shared_runtime").Types;
-const Printing = @import("printing");
 const AST = @import("ast");
 
 const Agent = Types.Agent;

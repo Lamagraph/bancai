@@ -65,7 +65,7 @@ pub const Diagnostic = struct {
         };
     }
 
-    const Printing = @import("printing");
+    const Printing = @import("profiler").Printing;
     const Token = AST.Lexer.Token;
 
     fn multiLineMarkup(

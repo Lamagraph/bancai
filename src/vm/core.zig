@@ -7,7 +7,7 @@ const std = @import("std");
 pub const Builtin = @import("builtin.zig");
 pub const Interaction = @import("interactions.zig");
 pub const Importer = @import("importer.zig");
-const Profiler = @import("profiler.zig");
+const Profiler = @import("profiler");
 
 const Runtime = @import("shared_runtime");
 const Types = Runtime.Types;
