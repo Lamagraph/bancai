@@ -10,12 +10,15 @@ const Config = @import("config");
 
 const Runtime = @import("shared_runtime");
 const Memory = Runtime.Memory;
+const Types = Runtime.Types;
 const Heap = Memory.Heap;
 
-const Agent = Runtime.Types.Agent;
+const Agent = Types.Agent;
+const Name = Types.Name;
 const AgentCount = Memory.AgentCount;
 
-const profile_memory = Config.heap == .basic and Config.debug_printing.benchmark and Config.debug_printing.print_memory_usage;
+pub const profile_memory = Config.heap == .basic and Config.debug_printing.benchmark and Config.debug_printing.print_memory_usage;
+pub const any_analysis = Config.debug_printing.benchmark or Config.debug_printing.print_memory_usage;
 
 pub const Interaction = struct {
     lhs: Agent.Id,
@@ -97,6 +100,10 @@ const Statement = struct {
         });
     }
 
+    fn debugEndStatementPrint() void {
+        std.debug.print("end.\n", .{});
+    }
+
     fn reset(self: *Statement, gpa: std.mem.Allocator) void {
         if (self.profiling_invocations) |*invocations| {
             for (invocations.items) |data| {
@@ -175,12 +182,12 @@ pub fn startInteraction(self: *Self, interaction: Interaction) void {
     }
 }
 
-pub fn endInteraction(self: *Self) void {
+pub fn endInteraction(self: *Self, ctx: Context) void {
     if (Config.debug_printing.benchmark) {
         self.current_statement.duration = self.timer.stop();
     }
 
-    self.analyzeStatement(self.current_statement);
+    self.analyzeStatement(self.current_statement, ctx);
 
     self.current_statement.reset(self.runtime.gpa);
 
@@ -189,9 +196,12 @@ pub fn endInteraction(self: *Self) void {
     self.stmt_cnt += 1;
 }
 
-fn analyzeStatement(self: *Self, stmt: Statement) void {
-    if (Config.debug_printing.benchmark) {
+fn analyzeStatement(self: *Self, stmt: Statement, ctx: Context) void {
+    if (any_analysis) {
         stmt.debugPrint(self.runtime);
+    }
+
+    if (Config.debug_printing.benchmark) {
         const run: RunResult = .{
             .interaction_count = self.interaction_count,
             .elapsed_time = @as(f64, @floatFromInt(stmt.duration.?.toMicroseconds())) / 1e6,
@@ -205,7 +215,29 @@ fn analyzeStatement(self: *Self, stmt: Statement) void {
 
             profiling_result.debugPrint(self.runtime);
         }
-        std.debug.print("end.\n\n", .{});
+    }
+
+    if (Config.debug_printing.print_memory_usage) {
+        self.analyzeContext(ctx);
+    }
+
+    if (any_analysis) {
+        Statement.debugEndStatementPrint();
+    }
+}
+
+pub const Context = struct {
+    agent_heap: Heap(Agent),
+    name_heap: Heap(Name),
+};
+
+pub fn analyzeContext(_: *const Self, ctx: Context) void {
+    if (Config.debug_printing.print_memory_usage) {
+        const agent_usage = ctx.agent_heap.getUsage();
+        const name_usage = ctx.name_heap.getUsage();
+
+        agent_usage.debugPrint("Agent");
+        name_usage.debugPrint("Name");
     }
 }
 

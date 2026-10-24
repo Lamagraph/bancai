@@ -15,6 +15,21 @@ pub const AgentCount = struct {
     }
 };
 
+pub const Usage = struct {
+    used: usize,
+    free: usize,
+    peak: usize,
+
+    pub fn debugPrint(self: Usage, typename: []const u8) void {
+        std.debug.print("Heap({s}): used = {}, free = {}, peak = {}\n", .{
+            typename,
+            self.used,
+            self.free,
+            self.peak,
+        });
+    }
+};
+
 pub fn Heap(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -26,7 +41,7 @@ pub fn Heap(comptime T: type) type {
         pub const VTable = struct {
             allocOne: *const fn (*anyopaque) Error!*T,
             freeOne: *const fn (*anyopaque, elem: *T) void,
-            printUsage: *const fn (*anyopaque) void,
+            getUsage: *const fn (*anyopaque) Usage,
             getAgentStructure: ?*const fn (*anyopaque, []AgentCount) u32,
         };
 
@@ -38,8 +53,8 @@ pub fn Heap(comptime T: type) type {
             self.vtable.freeOne(self.ptr, elem);
         }
 
-        pub inline fn printUsage(self: Self) void {
-            self.vtable.printUsage(self.ptr);
+        pub inline fn getUsage(self: Self) Usage {
+            return self.vtable.getUsage(self.ptr);
         }
 
         /// Returns the number of different agents.
@@ -63,7 +78,7 @@ pub fn LockedHeap(comptime T: type) type {
         const vtable: Heap(T).VTable = .{
             .allocOne = allocOne,
             .freeOne = freeOne,
-            .printUsage = printUsage,
+            .getUsage = getUsage,
             .getAgentStructure = null,
         };
 
@@ -99,13 +114,13 @@ pub fn LockedHeap(comptime T: type) type {
             self.inner.freeOne(elem);
         }
 
-        fn printUsage(ctx: *anyopaque) void {
+        fn getUsage(ctx: *anyopaque) Usage {
             const self: *Self = @ptrCast(@alignCast(ctx));
 
             self.lock();
             defer self.mutex.unlock();
 
-            self.inner.printUsage();
+            return self.inner.getUsage();
         }
     };
 }
@@ -143,7 +158,7 @@ pub fn BasicHeap(comptime T: type) type {
         const vtable: Heap(T).VTable = .{
             .allocOne = allocOne,
             .freeOne = freeOne,
-            .printUsage = printUsage,
+            .getUsage = getUsage,
             .getAgentStructure = if (T == Types.Agent) getAgentStructure else null,
         };
 
@@ -193,19 +208,19 @@ pub fn BasicHeap(comptime T: type) type {
             self.free_count += 1;
         }
 
-        fn printUsage(ctx: *anyopaque) void {
+        fn getUsage(ctx: *anyopaque) Usage {
             if (Config.debug_printing.print_memory_usage) {
                 const self: *Self = @ptrCast(@alignCast(ctx));
                 const used = self.items.len - self.free_count;
-                std.debug.print("Heap({s}): {} used, {} free, {} peak, sizeOf(T) = {}, sizeOf(Optional) = {}\n", .{
-                    @typeName(T),
-                    used,
-                    self.free_count,
-                    self.peak,
-                    @sizeOf(T),
-                    @sizeOf(Optional),
-                });
-                self.peak = 0;
+                defer self.peak = 0;
+
+                return .{
+                    .used = used,
+                    .free = self.free_count,
+                    .peak = self.peak,
+                };
+            } else {
+                unreachable;
             }
         }
 
@@ -278,7 +293,7 @@ pub fn ObjPool(comptime T: type) type {
         const vtable: Heap(T).VTable = .{
             .allocOne = allocOne,
             .freeOne = freeOne,
-            .printUsage = printUsage,
+            .getUsage = getUsage,
             .getAgentStructure = null,
         };
 
@@ -308,18 +323,18 @@ pub fn ObjPool(comptime T: type) type {
             self.free_count += 1;
         }
 
-        fn printUsage(ctx: *anyopaque) void {
+        fn getUsage(ctx: *anyopaque) Usage {
             if (Config.debug_printing.print_memory_usage) {
                 const self: *Self = @ptrCast(@alignCast(ctx));
-                const used = self.items.len - self.free_count;
-                std.debug.print("Heap({s}): {} used, {} free, {} peak, sizeOf(T) = {}\n", .{
-                    @typeName(T),
-                    used,
-                    self.free_count,
-                    self.peak,
-                    @sizeOf(T),
-                });
-                self.peak = 0;
+                defer self.peak = 0;
+
+                return .{
+                    .free = self.free_count,
+                    .used = self.capacity - self.free_count,
+                    .peak = self.peak,
+                };
+            } else {
+                unreachable;
             }
         }
 

@@ -512,7 +512,10 @@ pub fn runProgram(self: *Self, program: AST.Program) !void {
                 const interaction = try self.prepareActivePair(ap) orelse continue;
                 self.profiler.startInteraction(interaction);
                 try self.execActivePair(self.vm_core.mode);
-                self.profiler.endInteraction();
+                self.profiler.endInteraction(.{
+                    .agent_heap = self.global_ctx.agent_heap,
+                    .name_heap = self.global_ctx.name_heap,
+                });
             },
             else => unreachable,
         }
