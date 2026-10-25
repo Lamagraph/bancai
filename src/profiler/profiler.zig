@@ -72,6 +72,7 @@ pub const RunResult = struct {
 
 pub const ProfilingSingle = struct {
     interaction_count: u64,
+    total_agents: u64,
     agent_count_list: []AgentCount,
 
     fn debugPrint(self: ProfilingSingle, runtime: *const Runtime) void {
@@ -82,7 +83,7 @@ pub const ProfilingSingle = struct {
             const agent_cnt = self.agent_count_list[agent_idx].cnt;
             const name = runtime.getAgentName(agent_id).?;
 
-            std.debug.print("#{:0>4} - {s: >15} {: >9}\n", .{ agent_id, name, agent_cnt });
+            std.debug.print("#{:0>4} - {s: >40} {: >9}\n", .{ agent_id, name, agent_cnt });
         }
 
         std.debug.print("\n", .{});
@@ -121,7 +122,7 @@ pub const ProfilingResult = struct {
             }
             try string_builder.appendSlice(runtime.gpa, runtime.getAgentName(agent_id.*).?);
         }
-        return .{ try runtime.gpa.print("Interactions,{s}\n", .{string_builder.items}), map };
+        return .{ try runtime.gpa.print("Interactions,Total,{s}\n", .{string_builder.items}), map };
     }
 
     pub fn fillCountMap(self: ProfilingResult, runtime: *const Runtime, map: *CountMap) !void {
@@ -142,7 +143,7 @@ pub const ProfilingResult = struct {
     pub fn getResultData(self: ProfilingResult, runtime: *const Runtime, map: *CountMap) ![]u8 {
         var string_builder: std.ArrayList(u8) = .empty;
         for (self.profiling_invocations, 0..) |invocation, invocation_idx| {
-            try string_builder.print(runtime.gpa, "{}", .{invocation.interaction_count});
+            try string_builder.print(runtime.gpa, "{},{}", .{ invocation.interaction_count, invocation.total_agents });
             var iter = map.valueIterator();
             while (iter.next()) |count_lst| {
                 try string_builder.print(runtime.gpa, ",{}", .{count_lst.items[invocation_idx]});
@@ -238,8 +239,17 @@ pub fn collectAgentStructure(self: *Self, agent_heap: Heap(Agent)) std.mem.Alloc
 
     const ids_count = agent_heap.getAgentStructure(&agent_count_lst);
 
+    const total_agent_count = blk: {
+        var cnt: u64 = 0;
+        for (agent_count_lst[0..ids_count]) |agent_count| {
+            cnt += agent_count.cnt;
+        }
+        break :blk cnt;
+    };
+
     const data: ProfilingSingle = .{
         .interaction_count = self.interaction_count,
+        .total_agents = total_agent_count,
         .agent_count_list = try self.runtime.gpa.dupe(AgentCount, agent_count_lst[0..ids_count]),
     };
 
@@ -367,7 +377,7 @@ pub fn init(runtime: *const Runtime, profiling_window: ?u64, export_path: ?[]con
 }
 
 pub fn deinit(self: *Self) void {
-    self.current_statement.deinit(self.runtime.gpa);
+    _ = self;
 }
 
 test {
