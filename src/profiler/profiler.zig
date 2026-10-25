@@ -132,7 +132,7 @@ pub const ProfilingResult = struct {
             }
             var iter = map.valueIterator();
             while (iter.next()) |lst| {
-                if (lst.items.len < invocation_idx) {
+                if (lst.items.len < invocation_idx + 1) {
                     try lst.append(runtime.gpa, 0);
                 }
             }
@@ -185,7 +185,7 @@ pub const Statement = struct {
             for (invocations.items) |data| {
                 gpa.free(data.agent_count_list);
             }
-            invocations.clearRetainingCapacity();
+            invocations.clearAndFree(gpa);
         }
     }
 
