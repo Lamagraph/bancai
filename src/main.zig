@@ -9,9 +9,7 @@ const Config = @import("config");
 
 const clap = @import("clap");
 
-const profile_heap_structure = Config.heap == .basic and Config.debug_printing.benchmark and Config.debug_printing.print_memory_usage;
-
-const interaction_profiler = if (profile_heap_structure) "--profiling-window <usize>     Specify window between profiling prints.\n" else "";
+const interaction_profiler = if (Profiler.profile_memory) "--profiling-window <usize>     Specify window between profiling prints.\n" else "";
 
 const export_results = if (Profiler.any_analysis) "--export-csv-dir <str>         Specify directory to export profiling data.\n" else "";
 
@@ -19,7 +17,7 @@ const help =
     \\-h, --help                     Display this help and exit.
     \\-t, --threads <usize>          Specify number of threads to be run on (this does not work yet).
     \\-m, --heap-size <usize>        Specify the initial size of the heap. Default: 1024
-    \\-f, --filepath <str>           Specify file to be interpreted. Default: ./tests/list_sorting.in
+    \\-f, --filepath <str>           Specify file to be interpreted.
     \\-w, --warmup                   In multiThread mode, have the master core take a first pass at reducing equations before handing off to the worker cores.
     \\
 ++ export_results ++ interaction_profiler ++ "\n";
@@ -60,7 +58,7 @@ pub fn main(init: std.process.Init) !void {
     };
 
     const profiling_window: ?usize = profiling_window: {
-        if (profile_heap_structure) {
+        if (Profiler.profile_memory) {
             break :profiling_window res.args.@"profiling-window";
         } else break :profiling_window null;
     };
