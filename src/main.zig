@@ -11,7 +11,9 @@ const clap = @import("clap");
 
 const profile_heap_structure = Config.heap == .basic and Config.debug_printing.benchmark and Config.debug_printing.print_memory_usage;
 
-const interaction_profiler = if (profile_heap_structure) "--profiling-window <usize>     Specify window between profiling prints." else "";
+const interaction_profiler = if (profile_heap_structure) "--profiling-window <usize>     Specify window between profiling prints.\n" else "";
+
+const export_results = if (Profiler.any_analysis) "--export-csv-dir <str>         Specify directory to export profiling data.\n" else "";
 
 const help =
     \\-h, --help                     Display this help and exit.
@@ -20,7 +22,7 @@ const help =
     \\-f, --filepath <str>           Specify file to be interpreted. Default: ./tests/list_sorting.in
     \\-w, --warmup                   In multiThread mode, have the master core take a first pass at reducing equations before handing off to the worker cores.
     \\
-++ interaction_profiler ++ "\n";
+++ export_results ++ interaction_profiler ++ "\n";
 const params = clap.parseParamsComptime(help);
 
 const DEFAULT_HEAP_SIZE: usize = 1024;
@@ -63,6 +65,17 @@ pub fn main(init: std.process.Init) !void {
         } else break :profiling_window null;
     };
 
+    const export_path: ?[]const u8 = export_path: {
+        if (Profiler.any_analysis) {
+            if (res.args.@"export-csv-dir") |epath| {
+                break :export_path try std.fs.path.resolveAlloc(gpa, &.{epath});
+            } else break :export_path null;
+        } else {
+            break :export_path null;
+        }
+    };
+    defer if (export_path) |str| gpa.free(str);
+
     const contents = try Io.Dir.readFileAllocOptions(
         Io.Dir.cwd(),
         io,
@@ -104,7 +117,7 @@ pub fn main(init: std.process.Init) !void {
         .warmup = res.args.warmup != 0,
     };
 
-    var vm_profiler: Profiler = .init(&runtime, profiling_window);
+    var vm_profiler: Profiler = .init(&runtime, profiling_window, export_path);
     defer vm_profiler.deinit();
 
     var vm = try VM.init(&runtime, vm_cfg, &vm_profiler);

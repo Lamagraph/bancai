@@ -5,6 +5,7 @@ const Self = @This();
 const std = @import("std");
 
 pub const Printing = @import("printing.zig");
+const Exporter = @import("exporter.zig");
 
 const Config = @import("config");
 
@@ -46,7 +47,7 @@ const Timer = struct {
     }
 };
 
-const RunResult = struct {
+pub const RunResult = struct {
     elapsed_time: f64,
     interaction_count: u64,
 
@@ -57,14 +58,24 @@ const RunResult = struct {
             self.elapsed_time,
         });
     }
+
+    // csv
+
+    pub fn getResultLine(self: RunResult, gpa: std.mem.Allocator) ![]u8 {
+        return std.fmt.allocPrint(gpa, "{},{}\n", .{ self.interaction_count, self.elapsed_time });
+    }
+
+    pub fn getHeader() []const u8 {
+        return "Interactions,Time(s)\n";
+    }
 };
 
-const ProfilingSingle = struct {
+pub const ProfilingSingle = struct {
     interaction_count: u64,
     agent_count_list: []AgentCount,
 
     fn debugPrint(self: ProfilingSingle, runtime: *const Runtime) void {
-        std.debug.print("Profiling data after {} interactions\n", .{self.interaction_count});
+        std.debug.print("Profiling data after {} interaction{s}\n", .{ self.interaction_count, if (self.interaction_count != 1) "s" else "" });
 
         for (0..self.agent_count_list.len) |agent_idx| {
             const agent_id = self.agent_count_list[agent_idx].id;
@@ -78,7 +89,7 @@ const ProfilingSingle = struct {
     }
 };
 
-const ProfilingResult = struct {
+pub const ProfilingResult = struct {
     profiling_invocations: []ProfilingSingle,
 
     fn debugPrint(self: ProfilingResult, runtime: *const Runtime) void {
@@ -86,10 +97,75 @@ const ProfilingResult = struct {
             invocation.debugPrint(runtime);
         }
     }
+
+    // csv
+
+    pub const CountMap = std.AutoHashMap(Agent.Id, std.ArrayList(u64));
+
+    pub fn getHeader(self: ProfilingResult, runtime: *const Runtime) !struct { []u8, CountMap } {
+        var map: CountMap = .init(runtime.gpa);
+        for (self.profiling_invocations) |invocation| {
+            for (invocation.agent_count_list) |agent_count| {
+                if (!map.contains(agent_count.id)) {
+                    try map.put(agent_count.id, .empty);
+                }
+            }
+        }
+        var string_builder: std.ArrayList(u8) = .empty;
+        defer string_builder.deinit(runtime.gpa);
+
+        var iter = map.keyIterator();
+        while (iter.next()) |agent_id| {
+            if (string_builder.items.len != 0) {
+                try string_builder.appendSlice(runtime.gpa, ",");
+            }
+            try string_builder.appendSlice(runtime.gpa, runtime.getAgentName(agent_id.*).?);
+        }
+        return .{ try runtime.gpa.print("Interactions,{s}\n", .{string_builder.items}), map };
+    }
+
+    pub fn fillCountMap(self: ProfilingResult, runtime: *const Runtime, map: *CountMap) !void {
+        for (self.profiling_invocations, 0..) |invocation, invocation_idx| {
+            for (invocation.agent_count_list) |agent_count| {
+                const lst = map.getPtr(agent_count.id).?;
+                try lst.append(runtime.gpa, agent_count.cnt);
+            }
+            var iter = map.valueIterator();
+            while (iter.next()) |lst| {
+                if (lst.items.len < invocation_idx) {
+                    try lst.append(runtime.gpa, 0);
+                }
+            }
+        }
+    }
+
+    pub fn getResultData(self: ProfilingResult, runtime: *const Runtime, map: *CountMap) ![]u8 {
+        var string_builder: std.ArrayList(u8) = .empty;
+        for (self.profiling_invocations, 0..) |invocation, invocation_idx| {
+            try string_builder.print(runtime.gpa, "{}", .{invocation.interaction_count});
+            var iter = map.valueIterator();
+            while (iter.next()) |count_lst| {
+                try string_builder.print(runtime.gpa, ",{}", .{count_lst.items[invocation_idx]});
+            }
+            try string_builder.appendSlice(runtime.gpa, "\n");
+        }
+        return string_builder.toOwnedSlice(runtime.gpa);
+    }
+
+    pub fn deinitCountMap(map: *CountMap, runtime: *const Runtime) void {
+        var iter = map.valueIterator();
+
+        while (iter.next()) |count_lst| {
+            count_lst.deinit(runtime.gpa);
+        }
+        map.deinit();
+    }
 };
 
-const Statement = struct {
+pub const Statement = struct {
     interaction: Interaction,
+    id: u32,
+
     duration: ?std.Io.Duration,
     profiling_invocations: ?std.ArrayList(ProfilingSingle),
 
@@ -128,6 +204,8 @@ stmt_cnt: u32,
 current_statement: Statement,
 timer: Timer,
 
+exporter: ?Exporter,
+
 runtime: *const Runtime,
 
 pub fn incInteraction(self: *Self) void {
@@ -152,7 +230,7 @@ pub fn shouldGetAgentStructure(self: *const Self) bool {
     }
 }
 
-pub fn collectAgentStructure(self: *Self, agent_heap: Heap(Agent)) !void {
+pub fn collectAgentStructure(self: *Self, agent_heap: Heap(Agent)) std.mem.Allocator.Error!void {
     const invocations = &(self.current_statement.profiling_invocations.?);
 
     const max_agent_id = 512;
@@ -171,6 +249,7 @@ pub fn collectAgentStructure(self: *Self, agent_heap: Heap(Agent)) !void {
 pub fn startInteraction(self: *Self, interaction: Interaction) void {
     self.current_statement = .{
         .interaction = interaction,
+        .id = self.stmt_cnt,
         .duration = null,
         .profiling_invocations = null,
     };
@@ -187,6 +266,12 @@ pub fn endInteraction(self: *Self, ctx: Context) void {
         self.current_statement.duration = self.timer.stop();
     }
 
+    if (profile_memory) {
+        self.collectAgentStructure(ctx.agent_heap) catch |err| {
+            std.debug.print("Couldn't collect post-interaction agent structure: {s}\n", .{@errorName(err)});
+        };
+    }
+
     self.analyzeStatement(self.current_statement, ctx);
 
     self.current_statement.reset(self.runtime.gpa);
@@ -199,6 +284,12 @@ pub fn endInteraction(self: *Self, ctx: Context) void {
 fn analyzeStatement(self: *Self, stmt: Statement, ctx: Context) void {
     if (any_analysis) {
         stmt.debugPrint(self.runtime);
+
+        if (self.exporter) |*exporter| {
+            exporter.exportStatement(stmt) catch |err| {
+                std.debug.print("Couldn't export statement: {s}\n", .{@errorName(err)});
+            };
+        }
     }
 
     if (Config.debug_printing.benchmark) {
@@ -208,12 +299,26 @@ fn analyzeStatement(self: *Self, stmt: Statement, ctx: Context) void {
         };
         run.debugPrint();
 
+        if (self.exporter) |*exporter| {
+            exporter.exportRunResult(run) catch |err| {
+                std.debug.print("Couldn't export run result: {s}\n", .{@errorName(err)});
+            };
+        }
+
         if (profile_memory) {
             const invocations = stmt.profiling_invocations.?;
 
             const profiling_result: ProfilingResult = .{ .profiling_invocations = invocations.items };
 
             profiling_result.debugPrint(self.runtime);
+
+            if (self.exporter) |*exporter| {
+                if (profiling_result.profiling_invocations.len > 0) {
+                    exporter.exportProfilingResult(profiling_result) catch |err| {
+                        std.debug.print("Couldn't export profiling_result: {s}\n", .{@errorName(err)});
+                    };
+                }
+            }
         }
     }
 
@@ -223,6 +328,10 @@ fn analyzeStatement(self: *Self, stmt: Statement, ctx: Context) void {
 
     if (any_analysis) {
         Statement.debugEndStatementPrint();
+
+        if (self.exporter) |*exporter| {
+            exporter.stopExport();
+        }
     }
 }
 
@@ -241,13 +350,16 @@ pub fn analyzeContext(_: *const Self, ctx: Context) void {
     }
 }
 
-pub fn init(runtime: *const Runtime, profiling_window: ?u64) Self {
+pub fn init(runtime: *const Runtime, profiling_window: ?u64, export_path: ?[]const u8) Self {
     return .{
         .interaction_count = 0,
         .profiling_window = profiling_window,
         .profiling_cnt = 0,
         .stmt_cnt = 0,
-
+        .exporter = if (export_path) |epath| Exporter.init(epath, runtime) catch |err| err_blk: {
+            std.debug.print("Couldn't initialize exporter: {s}", .{@errorName(err)});
+            break :err_blk null;
+        } else null,
         .current_statement = undefined,
         .runtime = runtime,
         .timer = .init(runtime.io),
