@@ -86,11 +86,14 @@ $ tree example-bench
 example-bench
 ├── 0MakeRandomList~#number
 │   ├── agent_structure.csv
-│   └── bench.csv
+│   ├── bench.csv
+│   └── memory.csv
 ├── 1Cons~msort
 │   ├── agent_structure.csv
-│   └── bench.csv
+│   ├── bench.csv
+│   └── memory.csv
 └── 2checkSorted~Cons
     ├── agent_structure.csv
-    └── bench.csv
+    ├── bench.csv
+    └── memory.csv
 ```

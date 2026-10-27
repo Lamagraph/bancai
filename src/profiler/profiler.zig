@@ -350,13 +350,18 @@ pub const Context = struct {
     name_heap: Heap(Name),
 };
 
-pub fn analyzeContext(_: *const Self, ctx: Context) void {
+pub fn analyzeContext(self: *Self, ctx: Context) void {
     if (Config.debug_printing.print_memory_usage) {
         const agent_usage = ctx.agent_heap.getUsage();
         const name_usage = ctx.name_heap.getUsage();
 
         agent_usage.debugPrint("Agent");
         name_usage.debugPrint("Name");
+        if (self.exporter) |*exporter| {
+            exporter.exportUsage(agent_usage, name_usage) catch {
+                std.debug.print("Couldn't export memory usage\n", .{});
+            };
+        }
     }
 }
 

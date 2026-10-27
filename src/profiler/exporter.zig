@@ -10,6 +10,7 @@ const Runtime = @import("shared_runtime");
 const Profiler = @import("profiler.zig");
 const RunResult = Profiler.RunResult;
 const ProfilingResult = Profiler.ProfilingResult;
+const Usage = Runtime.Memory.Usage;
 
 export_dir: Io.Dir,
 
@@ -39,6 +40,7 @@ pub fn stopExport(self: *Self) void {
 
 const benchmark_file_name = "bench.csv";
 const profiling_file_name = "agent_structure.csv";
+const memory_file_name = "memory.csv";
 
 /// If the file exists, append result to the end.
 pub fn exportRunResult(self: *Self, result: RunResult) !void {
@@ -77,6 +79,30 @@ pub fn exportProfilingResult(self: *Self, result: ProfilingResult) !void {
     defer profiling_file.close(self.runtime.io);
     var writer = profiling_file.writer(self.runtime.io, &.{});
     try writer.interface.print("{s}{s}", .{ header, data });
+}
+
+pub fn exportUsage(self: *Self, agent_usage: Usage, name_usage: Usage) !void {
+    const header = "Type,used,free,peak\n";
+    var buffer: [1024]u8 = undefined;
+    var fixed = std.heap.FixedBufferAllocator.init(&buffer);
+    const gpa = fixed.allocator();
+
+    const data = gpa.print("{s}Agent,{},{},{}\nName,{},{},{}\n", .{
+        header,
+        agent_usage.used,
+        agent_usage.free,
+        agent_usage.peak,
+        name_usage.used,
+        name_usage.free,
+        name_usage.peak,
+    }) catch unreachable;
+
+    const stmt_dir = self.stmt_dir.?;
+    const memory_file = try stmt_dir.createFile(self.runtime.io, memory_file_name, .{});
+    defer memory_file.close(self.runtime.io);
+
+    var writer = memory_file.writer(self.runtime.io, &.{});
+    try writer.interface.writeAll(data);
 }
 
 /// Expects export_path to be resolved.
