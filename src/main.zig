@@ -23,6 +23,13 @@ const help =
 ++ export_results ++ interaction_profiler ++ "\n";
 const params = clap.parseParamsComptime(help);
 
+pub const std_options: std.Options = .{
+    .log_scope_levels = &.{
+        .{ .scope = .vm, .level = .warn },
+        .{ .scope = .core, .level = .warn },
+    },
+};
+
 const DEFAULT_HEAP_SIZE: usize = 1024;
 const DEFAULT_CORES_NUM: usize = 1;
 

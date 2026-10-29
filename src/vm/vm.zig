@@ -30,6 +30,7 @@ pub const WorkerState = @import("mt/worker_ctrl.zig").State;
 
 pub const GlobalCtx = @import("global_ctx.zig").GlobalCtx;
 const Multi = @import("mt/multi.zig").Multi;
+const Slot = @import("mt/slot.zig").Slot;
 
 pub const Builtin = @import("builtin.zig");
 pub const Importer = @import("importer.zig");
@@ -353,7 +354,32 @@ fn stopCores(self: *Self) void {
     log.info("{} core(s) stopped", .{m.slots.len});
 }
 
+fn printCoreStats(self: *Self) void {
+    if (!BuildConfig.debug_printing.print_core_stats) return;
+
+    var total = self.main_core.interactions;
+    const slots: []Slot = switch (self.vmode) {
+        .s => &.{},
+        .m => |m| m.slots,
+    };
+    for (slots) |*slot| total += slot.core.interactions;
+
+    printCoreStat("main", self.main_core.interactions, total);
+    for (slots) |*slot| {
+        var buf: [16]u8 = undefined;
+        const name = std.fmt.bufPrint(&buf, "{}", .{slot.rawId()}) catch unreachable;
+        printCoreStat(name, slot.core.interactions, total);
+    }
+    std.debug.print("total: {} interactions\n", .{total});
+}
+
+fn printCoreStat(name: []const u8, interactions: u64, total: u64) void {
+    const share = if (total == 0) 0 else @as(f64, @floatFromInt(interactions)) * 100 / @as(f64, @floatFromInt(total));
+    std.debug.print("core-{s}: {} interactions ({d:.1}%)\n", .{ name, interactions, share });
+}
+
 pub fn runProgram(self: *Self, program: AST.Program) !void {
+    defer self.printCoreStats();
     try self.startCores();
     defer self.stopCores();
 

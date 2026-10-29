@@ -52,6 +52,7 @@ profiler: *Profiler,
 
 core_ctrl: ?CoreCtrl,
 local_ctx: LocalCtx,
+interactions: u64 = 0,
 
 registers: [number_of_registers]Value,
 condition_registers: [number_of_registers]Condition.Register.CondValue,
