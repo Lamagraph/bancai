@@ -34,9 +34,7 @@ const Multi = @import("mt/multi.zig").Multi;
 pub const Builtin = @import("builtin.zig");
 pub const Importer = @import("importer.zig");
 pub const Interaction = @import("interactions.zig");
-const Normalize = @import("normalize.zig");
-
-pub const normalizeEquation = Normalize.normalizeEquation;
+const Link = @import("link.zig");
 
 const VM = @This();
 const Self = VM;
@@ -186,7 +184,7 @@ fn objToValueAgent(self: *Self, obj: AST.Object) anyerror!Value {
 fn objToValueName(self: *Self, obj: AST.Object) !Value {
     const name = try self.global_ctx.name_heap.allocOne();
 
-    name.* = .{ .port = null };
+    name.* = .empty;
     try self.runtime.associated_names.put(obj.name, name);
 
     return .{ .name = name };
@@ -208,13 +206,7 @@ fn objToValue(
     if (self.runtime.associated_names.getPtr(obj.name)) |maybe_name| {
         if (maybe_name.*) |name| {
             maybe_name.* = null;
-            if (name.port) |port| {
-                defer self.global_ctx.name_heap.freeOne(name);
-
-                return port;
-            } else {
-                return .{ .name = name };
-            }
+            return (Value{ .name = name }).resolve(self.global_ctx.name_heap);
         } else {
             // Implicitly reusing
         }
@@ -226,7 +218,7 @@ fn objToValue(
 inline fn printStmt(self: *Self, name_to_print: AST.Name) !void {
     if (self.runtime.associated_names.get(name_to_print.val)) |maybe_name| {
         if (maybe_name) |name| {
-            if (name.port) |port| {
+            if (name.load()) |port| {
                 try Printing.tryPrint(self.runtime, self.runtime.gpa, port);
             } else {
                 std.debug.print("<MOVED>\n", .{});
@@ -245,12 +237,7 @@ inline fn freeStmt(self: *Self, names: []const AST.Name) !void {
         if (self.runtime.associated_names.get(name)) |maybe_wire| {
             defer _ = self.runtime.associated_names.remove(name);
             if (maybe_wire) |wire| {
-                const traversed = wire.traverseFree(self.main_core.local_ctx.name_heap);
-                defer self.main_core.local_ctx.name_heap.freeOne(traversed);
-                if (traversed.port) |port| {
-                    // of course, there shouldn't be anything other than an agent
-                    try Builtin.Eraser.erase(&self.main_core, port.agent);
-                }
+                try Builtin.Eraser.eraseValue(&self.main_core, .{ .name = wire });
             }
         } else {
             std.debug.print("Trying to free non-existent name {s}\n", .{name});
@@ -303,7 +290,7 @@ inline fn prepareActivePair(self: *Self, ap: AST.ActivePair) !?Profiler.Interact
     const rhs = try self.objToValue(ap.rhs.val);
     const eq = EquationUnnormalized{ .lhs = lhs, .rhs = rhs };
 
-    const normalized = try Normalize.normalizeEquation(self.global_ctx.name_heap, eq) orelse return null;
+    const normalized = Link.link(self.global_ctx.name_heap, eq.lhs, eq.rhs) orelse return null;
 
     try self.global_ctx.pushEquationNormalized(normalized);
 

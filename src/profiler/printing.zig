@@ -115,7 +115,7 @@ fn getAgentSymbolNested(runtime: *const Runtime, ag: *const Agent, stream: *Buff
                 var wire = _wire;
                 var cnt: u32 = 0;
 
-                while (wire.port) |wired_to| {
+                while (wire.load()) |wired_to| {
                     Debug.log(.print_interactions, "(n)", .{});
 
                     if (wired_to == .agent) {
@@ -160,7 +160,7 @@ pub fn tryPrint(runtime: *const Runtime, gpa: std.mem.Allocator, val: Value) !vo
     var cur = val;
     var idx: u32 = 0;
     while (cur == .name) : ({
-        cur = cur.name.port.?;
+        cur = cur.name.load().?;
         idx += 1;
     }) {
         Debug.log(.print_interactions, "(n)", .{});
