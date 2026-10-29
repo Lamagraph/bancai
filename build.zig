@@ -6,6 +6,7 @@ pub const DebugPrintConfig = struct {
     print_interactions: bool = false,
     print_memory_usage: bool = false,
     print_frees: bool = false,
+    print_core_stats: bool = false,
     benchmark: bool = false,
 };
 
@@ -129,6 +130,7 @@ pub fn build(b: *std.Build) void {
         .print_interactions = b.option(bool, "print-interactions", "Print interaction points when they happen") orelse false,
         .print_memory_usage = b.option(bool, "print-memory-usage", "Print memory usage after top-level interactions") orelse false,
         .print_frees = b.option(bool, "print-frees", "Print message when a agent/name free happens") orelse false,
+        .print_core_stats = b.option(bool, "print-core-stats", "Print how many interactions each core evaluated") orelse false,
         .benchmark = b.option(bool, "benchmark", "Print time spent in interactions") orelse false,
     };
 

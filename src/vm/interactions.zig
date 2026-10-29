@@ -103,6 +103,8 @@ fn evalCondition(c: *Core, lagent: *Agent, ragent: *Agent, instructions: []Condi
 }
 
 pub fn evalEquation(c: *Core, eq: Equation) !void {
+    if (Config.debug_printing.print_core_stats) c.interactions += 1;
+
     var lagent = eq.lhs;
     var ragent = eq.rhs;
 

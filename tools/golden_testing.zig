@@ -8,6 +8,25 @@ const golden_subdir = "golden";
 const nested_subdir = "nested";
 const golden_ext = ".golden";
 
+const concurrent_thread_counts = [_][]const u8{ "2", "4", "8" };
+const concurrent_repeats = 20;
+
+const single_run = [_][]const []const u8{&.{}};
+
+/// Extra arguments for every run of a stdout test: one single-threaded run, then
+/// multi-threaded ones. Each run must produce the golden output, which is
+/// generated single-threaded.
+const stdout_runs = runs: {
+    var runs: [1 + concurrent_repeats * concurrent_thread_counts.len][]const []const u8 = undefined;
+    runs[0] = &.{};
+    for (0..concurrent_repeats) |repeat| {
+        for (concurrent_thread_counts, 0..) |threads, idx| {
+            runs[1 + repeat * concurrent_thread_counts.len + idx] = &.{ "-t", threads };
+        }
+    }
+    break :runs runs;
+};
+
 pub const Lines = struct {
     lines: [][]const u8,
 
@@ -195,8 +214,19 @@ const Query = struct {
     args: [][]const u8,
     program_output: InvocationResult,
 
-    pub fn init(ctx: *const Context, filepath: []const u8, goldenpath: []const u8, stream: Stream) !Query {
-        const args = try ctx.gpa.dupe([]const u8, &.{ ctx.program_path, "-f", filepath });
+    pub fn init(
+        ctx: *const Context,
+        filepath: []const u8,
+        goldenpath: []const u8,
+        stream: Stream,
+        extra_args: []const []const u8,
+    ) !Query {
+        var arg_list: std.ArrayList([]const u8) = .empty;
+        errdefer arg_list.deinit(ctx.gpa);
+        try arg_list.append(ctx.gpa, ctx.program_path);
+        try arg_list.appendSlice(ctx.gpa, extra_args);
+        try arg_list.appendSlice(ctx.gpa, &.{ "-f", filepath });
+        const args = try arg_list.toOwnedSlice(ctx.gpa);
 
         const output = try invokeAndCollect(.{
             .args = args,
@@ -363,7 +393,49 @@ const Summary = union(enum) {
     }
 };
 
-pub fn processDirectory(ctx: *const Context, path_to_dir: []const u8, stream: Stream) !Summary {
+/// Runs the program once and compares its output with the golden file.
+/// Prints the reason and returns false on any mismatch.
+fn compareRun(
+    ctx: *const Context,
+    filepath: []const u8,
+    golden_path: []const u8,
+    stream: Stream,
+    extra_args: []const []const u8,
+    stderr: *std.Io.Writer,
+) !bool {
+    const query = try Query.init(ctx, filepath, golden_path, stream, extra_args);
+    defer query.deinit(ctx.gpa);
+
+    if (query.program_output != .success)
+        try stderr.print("{s}\n", .{try query.program_output.stringFailure(query.args, ctx.gpa)});
+
+    var result = try compare(ctx, &query);
+    defer result.deinit(ctx.gpa);
+    switch (result) {
+        .correct => return true,
+        .invocation_failure => return false,
+        .file_does_not_exist => {
+            try stderr.print("Missing golden file for {s}: {s}\n", .{ query.input_path, query.goldenpath });
+            return false;
+        },
+        .line_diff => |line_diff| {
+            if (extra_args.len != 0) {
+                const extra = try concatWithSep(ctx.gpa, extra_args, " ");
+                defer ctx.gpa.free(extra);
+                try stderr.print("Run with: {s}\n", .{extra});
+            }
+            try line_diff.writeMessage(stderr, query.input_path, query.goldenpath);
+            return false;
+        },
+    }
+}
+
+pub fn processDirectory(
+    ctx: *const Context,
+    path_to_dir: []const u8,
+    stream: Stream,
+    runs: []const []const []const u8,
+) !Summary {
     var _arena = std.heap.ArenaAllocator.init(ctx.gpa);
     defer _arena.deinit();
     const arena = _arena.allocator();
@@ -407,7 +479,7 @@ pub fn processDirectory(ctx: *const Context, path_to_dir: []const u8, stream: St
         {
             const nested_directory_resolved = try std.fs.path.resolve(ctx.gpa, &.{ path_to_dir_resolved, entry.name });
             defer ctx.gpa.free(nested_directory_resolved);
-            const nested_summary = try processDirectory(ctx, nested_directory_resolved, stream);
+            const nested_summary = try processDirectory(ctx, nested_directory_resolved, stream, runs);
             summary.merge(nested_summary);
         } else if (std.mem.eql(u8, std.fs.path.extension(entry.name), ".in")) {
             const golden_path = blk: {
@@ -416,34 +488,26 @@ pub fn processDirectory(ctx: *const Context, path_to_dir: []const u8, stream: St
                 break :blk try std.fs.path.resolve(arena, &.{ path_to_dir_resolved, golden_subdir, golden_basename });
             };
             const filepath = try std.fs.path.resolve(arena, &.{ path_to_dir_resolved, entry.name });
-            const query = try Query.init(ctx, filepath, golden_path, stream);
-            defer query.deinit(ctx.gpa);
-
-            if (query.program_output != .success)
-                try stderr.print("{s}\n", .{try query.program_output.stringFailure(query.args, ctx.gpa)});
 
             switch (summary) {
                 .comparison => |*comparison| {
-                    var result = try compare(ctx, &query);
-                    defer result.deinit(ctx.gpa);
-                    switch (result) {
-                        .correct => {
-                            comparison.succeeded += 1;
-                        },
-                        .invocation_failure => {
-                            comparison.failed += 1;
-                        },
-                        .file_does_not_exist => {
-                            comparison.failed += 1;
-                            try stderr.print("Missing golden file for {s}: {s}\n", .{ query.input_path, query.goldenpath });
-                        },
-                        .line_diff => |line_diff| {
-                            comparison.failed += 1;
-                            try line_diff.writeMessage(stderr, query.input_path, query.goldenpath);
-                        },
+                    const passed = for (runs) |extra_args| {
+                        if (!try compareRun(ctx, filepath, golden_path, stream, extra_args, stderr)) break false;
+                    } else true;
+
+                    if (passed) {
+                        comparison.succeeded += 1;
+                    } else {
+                        comparison.failed += 1;
                     }
                 },
                 .generated => |*generated| {
+                    const query = try Query.init(ctx, filepath, golden_path, stream, &.{});
+                    defer query.deinit(ctx.gpa);
+
+                    if (query.program_output != .success)
+                        try stderr.print("{s}\n", .{try query.program_output.stringFailure(query.args, ctx.gpa)});
+
                     const result = try generate(ctx, &query);
                     switch (result) {
                         .created => generated.created += 1,
@@ -496,11 +560,11 @@ pub fn main(init: std.process.Init) !void {
         .mode = mode,
     };
 
-    const stdout_summary = try processDirectory(&ctx, stdout_tests_path, .stdout);
+    const stdout_summary = try processDirectory(&ctx, stdout_tests_path, .stdout, &stdout_runs);
     const stdout_summary_text = try stdout_summary.getText(ctx.gpa);
     defer ctx.gpa.free(stdout_summary_text);
 
-    const stderr_summary = try processDirectory(&ctx, stderr_tests_path, .stderr);
+    const stderr_summary = try processDirectory(&ctx, stderr_tests_path, .stderr, &single_run);
     const stderr_summary_text = try stderr_summary.getText(ctx.gpa);
     defer ctx.gpa.free(stderr_summary_text);
 

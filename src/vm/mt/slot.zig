@@ -12,6 +12,7 @@ const GlobalCtx = @import("../global_ctx.zig").GlobalCtx;
 const WorkerCtrl = @import("worker_ctrl.zig");
 const DoorBell = @import("door_bell.zig").DoorBell;
 const SigChannel = @import("signals.zig").SigChannel;
+const FoldState = @import("multi.zig").Multi.Transition.FoldState;
 
 pub const Slot = struct {
     ctrl: *WorkerCtrl,
@@ -93,32 +94,44 @@ pub const Slot = struct {
         }
     }
 
-    pub fn isStopped(slot: *Slot) VmError!bool {
+    pub fn isStopped(slot: *Slot, state: *FoldState) VmError!void {
         const pending = slot.sig_ch.isPending();
 
-        return switch (slot.ctrl.getState()) {
-            .goner, .corpse => VmError.CoreFailed,
+        const stopped = switch (slot.ctrl.getState()) {
+            .goner, .corpse => return VmError.CoreFailed,
             .newborn, .busy => false,
             .applicant => !pending,
         };
+
+        if (!stopped) state.need_finish = false;
     }
 
-    pub fn isEvalDone(slot: *Slot) VmError!bool {
+    pub fn isEvalDone(slot: *Slot, state: *FoldState) VmError!void {
         const pending = slot.sig_ch.isPending();
 
-        return switch (slot.ctrl.getState()) {
-            .goner, .corpse => VmError.CoreFailed,
-            .busy => false,
+        const done = switch (slot.ctrl.getState()) {
+            .goner, .corpse => return VmError.CoreFailed,
+            .busy => busy: {
+                state.any_busy = true;
+                break :busy false;
+            },
             .applicant => !pending,
             .newborn => unreachable,
         };
+
+        if (!done) state.need_finish = false;
     }
 
-    pub fn isExited(slot: *Slot) VmError!bool {
-        if (slot.thread == null) {
-            return true;
-        }
+    pub fn wakeIfIdle(slot: *Slot) VmError!void {
+        if (slot.sig_ch.isPending()) return;
+        if (slot.ctrl.getState() != .applicant) return;
 
-        return slot.ctrl.getState() == .corpse;
+        _ = slot.sig_ch.putSignal(.eval_sig);
+    }
+
+    pub fn isExited(slot: *Slot, state: *FoldState) VmError!void {
+        if (slot.thread == null) return;
+
+        if (slot.ctrl.getState() != .corpse) state.need_finish = false;
     }
 };

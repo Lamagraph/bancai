@@ -167,46 +167,68 @@ pub const Multi = struct {
         self.state = state;
     }
 
-    const Transition = struct {
+    pub const Transition = struct {
         const EnterFn = *const fn (*Slot) VmError!void;
-        const SettledFn = *const fn (*Slot) VmError!bool;
+
+        pub const FoldState = struct {
+            need_finish: bool,
+            any_busy: bool,
+
+            pub fn init() FoldState {
+                return .{ .need_finish = true, .any_busy = false };
+            }
+        };
+
+        const FoldFn = *const fn (*Slot, *FoldState) VmError!void;
 
         from_state: VmState,
         to_state: VmState,
         enter: EnterFn,
-        settled: SettledFn,
+        fold: FoldFn,
+        wake: ?EnterFn = null,
 
         const eval_transition: Transition = .{
             .from_state = .vm_eval,
             .to_state = .vm_stop,
             .enter = Slot.enterEval,
-            .settled = Slot.isEvalDone,
+            .fold = Slot.isEvalDone,
+            .wake = Slot.wakeIfIdle,
         };
 
         const stop_transition: Transition = .{
             .from_state = .vm_stop,
             .to_state = .vm_stop,
             .enter = Slot.enterStop,
-            .settled = Slot.isStopped,
+            .fold = Slot.isStopped,
         };
 
         const exit_transition: Transition = .{
             .from_state = .vm_exit,
             .to_state = .vm_exit,
             .enter = Slot.enterExit,
-            .settled = Slot.isExited,
+            .fold = Slot.isExited,
         };
     };
 
-    fn run(self: *Multi, slot_settled: Transition.SettledFn) VmError!?Ring {
+    fn run(self: *Multi, transition: Transition) VmError!?Ring {
         const heard = self.bell.listen();
 
-        var settled = true;
+        var state = Transition.FoldState.init();
         for (self.slots) |*slot| {
-            settled = try slot_settled(slot) and settled;
+            try transition.fold(slot, &state);
         }
 
-        return if (settled) null else heard;
+        if (state.need_finish) return null;
+
+        if (state.any_busy) {
+            if (transition.wake) |wake| {
+                for (self.slots) |*slot| {
+                    try wake(slot);
+                }
+            }
+        }
+
+        return heard;
     }
 
     fn transit(self: *Multi, transition: Transition) VmError!void {
@@ -216,7 +238,7 @@ pub const Multi = struct {
 
         self.setVmState(transition.from_state);
 
-        while (try self.run(transition.settled)) |heard| {
+        while (try self.run(transition)) |heard| {
             self.bell.sleep(heard);
         }
 
