@@ -20,7 +20,7 @@ const Condition = Compilation.Condition;
 
 const MainCtrl = @import("mt/main_ctrl.zig");
 const WorkerCtrl = @import("mt/worker_ctrl.zig");
-const Normalize = @import("normalize.zig");
+const Link = @import("link.zig");
 
 const CoreMode = @import("core_types.zig").CoreMode;
 const CoreId = @import("core_types.zig").CoreId;
@@ -93,11 +93,11 @@ pub const LocalCtx = struct {
     }
 
     pub inline fn pushEquation(self: *LocalCtx, eq: EquationUnnormalized) !void {
-        try Normalize.pushEquation(self.name_heap, self.equation_fetcher, eq);
+        try Link.pushEquation(self.name_heap, self.equation_fetcher, eq);
     }
 
     pub inline fn pushUrgent(self: *LocalCtx, eq: EquationUnnormalized) !void {
-        try Normalize.pushUrgentEquation(self.name_heap, self.equation_fetcher, eq);
+        try Link.pushUrgentEquation(self.name_heap, self.equation_fetcher, eq);
     }
 
     /// This function will always be called in the context of two agents interacting.
@@ -109,7 +109,7 @@ pub const LocalCtx = struct {
 
 pub fn createEmptyName(c: *Core) !*Name {
     const name = try c.local_ctx.allocOneName();
-    name.port = null;
+    name.* = .empty;
     return name;
 }
 
@@ -180,7 +180,7 @@ pub fn execInstructions(
             },
             .mk_name => {
                 const name = try c.local_ctx.allocOneName();
-                name.* = .{ .port = null };
+                name.* = .empty;
                 c.registers[instruction.operand1] = .{ .name = name };
             },
             .load_arguments => {

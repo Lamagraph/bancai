@@ -138,6 +138,9 @@ pub fn build(b: *std.Build) void {
     const heap_kind = b.option(HeapKind, "heap", "Which heap implementation to use") orelse .objpool;
     options.addOption(HeapKind, "heap", heap_kind);
 
+    const check_name_arrivals = b.option(bool, "check-name-arrivals", "Assert that every name is visited at most twice") orelse (optimize == .debug);
+    options.addOption(bool, "check_name_arrivals", check_name_arrivals);
+
     const mod_options = options.createModule();
 
     mod_profiler.addImport("config", mod_options);

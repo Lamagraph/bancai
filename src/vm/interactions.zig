@@ -39,19 +39,15 @@ fn evalCondition(c: *Core, lagent: *Agent, ragent: *Agent, instructions: []Condi
         switch (instr.tag) {
             .put_port => |port| {
                 const owner = if (port.owner == .lhs) lagent else ragent;
-                const value = if (port.idx) |idx| owner.ports[idx] else Value{ .agent = owner };
                 const agent = agent: {
-                    switch (value) {
-                        .name => |name| {
-                            const traversed = name.unwind();
-                            if (traversed) |agent| {
-                                break :agent agent;
-                            } else {
-                                std.debug.print("No value on name\n", .{});
-                                return EvaluationError.EmptyName;
-                            }
-                        },
+                    const idx = port.idx orelse break :agent owner;
+                    owner.ports[idx] = owner.ports[idx].resolve(c.local_ctx.name_heap);
+                    switch (owner.ports[idx]) {
                         .agent => |agent| break :agent agent,
+                        .name => {
+                            std.debug.print("No value on name\n", .{});
+                            return EvaluationError.EmptyName;
+                        },
                         else => unreachable,
                     }
                 };

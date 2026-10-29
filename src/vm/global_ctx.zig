@@ -12,7 +12,7 @@ const EquationUnnormalized = Types.EquationUnnormalized;
 
 const Core = @import("core.zig");
 const Config = @import("config.zig").Config;
-const Normalize = @import("normalize.zig");
+const Link = @import("link.zig");
 
 pub const GlobalCtx = struct {
     agent_heap: Memory.Heap(Agent),
@@ -198,7 +198,7 @@ pub const GlobalCtx = struct {
     }
 
     pub fn pushEquation(self: GlobalCtx, eq: EquationUnnormalized) !void {
-        try Normalize.pushEquation(self.name_heap, self.equation_fetcher, eq);
+        try Link.pushEquation(self.name_heap, self.equation_fetcher, eq);
     }
 
     pub fn pushEquationNormalized(self: GlobalCtx, eq: Types.Equation) !void {
@@ -206,6 +206,6 @@ pub const GlobalCtx = struct {
     }
 
     pub fn pushUrgentEquation(self: GlobalCtx, eq: EquationUnnormalized) !void {
-        try Normalize.pushUrgentEquation(self.name_heap, self.equation_fetcher, eq);
+        try Link.pushUrgentEquation(self.name_heap, self.equation_fetcher, eq);
     }
 };
