@@ -1,0 +1,32 @@
+// Merge sort: conditions compare list elements while other cores move them.
+// Merge sort from Inpla
+
+msort(ret) >< [] => ret ~ [];
+// Parentheses are unnecessary. They are here to assert that Tuple1
+// is omitted.
+msort(ret) >< (x:xs) => ms_tail(ret, x) ~ xs;
+
+ms_tail(ret, n) >< [] => ret ~ [n];
+ms_tail(ret, n) >< x:xs =>
+	split(left,right) ~ n:x:xs,
+	msort(a) ~ left,
+	msort(b) ~ right,
+	merge(ret, b) ~ a;
+
+merge(ret, snd) >< [] => ret~snd;
+merge(ret, snd) >< x:xs => mergeCC(ret, x, xs) ~ snd;
+
+mergeCC(ret, y, ys) >< [] => ret ~ y:ys;
+mergeCC(ret, y, ys) >< x:xs
+| x <= y    => ret ~ x:cnt, mergeCC(cnt, y, ys) ~ xs
+| otherwise => ret ~ y:cnt, mergeCC(cnt, x, xs) ~ ys;
+
+split(right, left) >< [] => right~[], left~[];
+split(right, left) >< x:xs =>
+	right ~ x:cntl,
+	left ~ cntr,
+	split(cntr, cntl) ~ xs;
+
+
+msort(sorted) ~ [17, 3, 25, 8, 1, 30, 12, 5, 22, 9, 14, 2, 27, 19, 6, 11, 28, 4, 16, 23, 7, 21, 13, 29, 10, 18, 26, 15, 24, 20];
+sorted;

@@ -1,0 +1,31 @@
+// Fact uses Dup and a Sub whose second operand arrives late.
+Fact(r) >< x
+| x == 1 => r ~ x
+| otherwise =>
+    Dup(x1, x2) ~ x,
+    w << Sub(x1, 1),
+    Fact(w') ~ w,
+    r << Mul(x2, w');
+
+Fact(r) ~ 12;
+
+r;
+
+Fib'(r, p1, p2) >< n
+| n == 0 => r ~ p2, Eraser() ~ (p1, n)
+| otherwise =>
+    n' << Sub(n, 1),
+    Dup(p1', p1'') ~ p1,
+    new_p1 << Add(p1', p2),
+    Fib'(r, new_p1, p1'') ~ n';
+
+Fib(r) >< n =>
+    Fib'(r, 1, 0) ~ n;
+
+Fib(r1) ~ 20;
+
+r1;
+
+Div(q, y) ~ 4;
+y ~ 20;
+q;

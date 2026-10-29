@@ -1,0 +1,23 @@
+// Many independent active pairs, Dup copies whole subnets.
+Add(r, x) >< S(y) =>
+    Add(w, x) ~ y,
+    r ~ S(w);
+
+Add(r, x) >< Z() =>
+    r ~ x;
+
+Mul(r, x) >< S(y) =>
+    Dup(x1, x2) ~ x,
+    Mul(w, x1) ~ y,
+    Add(r, w) ~ x2;
+
+Mul(r, x) >< Z() =>
+    r ~ Z(),
+    x ~ Eraser();
+
+Mul(r, S(S(S(S(S(S(Z()))))))) ~ S(S(S(S(S(S(S(Z())))))));
+r;
+
+Mul(r2, S(S(S(Z())))) ~ S(S(S(S(Z()))));
+Mul(r3, r2) ~ S(S(Z()));
+r3;
