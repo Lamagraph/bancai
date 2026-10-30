@@ -50,16 +50,23 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
-    if (res.args.threads) |n|
-        std.debug.print("you specified -t {}, but it is not yet developed.\n", .{n});
+    if (res.args.threads) |n| {
+        std.log.err("you specified -t {}, but it is not yet developed.\n", .{n});
+        std.process.exit(1);
+    }
     const filepath = res.args.filepath orelse {
-        std.debug.print("File not specified. \nConsider using \"--help\".\n", .{});
+        std.log.err("File not specified. \nConsider using \"--help\".\n", .{});
         std.process.exit(1);
     };
 
     const profiling_window: ?usize = profiling_window: {
         if (Profiler.profile_memory) {
-            break :profiling_window res.args.@"profiling-window";
+            const maybe_window = res.args.@"profiling-window";
+            if (maybe_window != null and maybe_window.? == 0) {
+                std.log.err("Profiling window cannot be zero.", .{});
+                std.process.exit(1);
+            }
+            break :profiling_window maybe_window;
         } else break :profiling_window null;
     };
 

@@ -6,6 +6,8 @@ const Types = @import("types.zig");
 
 pub const HeapKind = enum { basic, objpool };
 
+pub const max_agent_structure_ids = 1024;
+
 pub const AgentCount = struct {
     id: Types.Agent.Id,
     cnt: usize,
@@ -230,9 +232,7 @@ pub fn BasicHeap(comptime T: type) type {
                 @compileError("Only works for agent heaps");
             }
 
-            const max_id = 1024;
-
-            var agent_structure_list: [max_id]usize = undefined;
+            var agent_structure_list: [max_agent_structure_ids]usize = undefined;
 
             @memset(&agent_structure_list, 0);
 
@@ -247,7 +247,7 @@ pub fn BasicHeap(comptime T: type) type {
 
             var id_idx: u32 = 0;
 
-            for (0..max_id) |agent_id| {
+            for (0..max_agent_structure_ids) |agent_id| {
                 if (agent_structure_list[agent_id] != 0) {
                     agent_structure[id_idx] = .{ .cnt = agent_structure_list[agent_id], .id = @intCast(agent_id) };
                     id_idx += 1;

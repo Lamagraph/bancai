@@ -21,6 +21,18 @@ const AgentCount = Memory.AgentCount;
 pub const profile_memory = Config.heap == .basic and Config.debug_printing.benchmark and Config.debug_printing.print_memory_usage;
 pub const any_analysis = Config.debug_printing.benchmark or Config.debug_printing.print_memory_usage;
 
+interaction_count: u64,
+profiling_window: ?u64,
+profiling_cnt: u64,
+stmt_cnt: u32,
+
+current_statement: Statement,
+timer: Timer,
+
+exporter: ?Exporter,
+
+runtime: *const Runtime,
+
 pub const Interaction = struct {
     lhs: Agent.Id,
     rhs: Agent.Id,
@@ -197,18 +209,6 @@ pub const Statement = struct {
     }
 };
 
-interaction_count: u64,
-profiling_window: ?u64,
-profiling_cnt: u64,
-stmt_cnt: u32,
-
-current_statement: Statement,
-timer: Timer,
-
-exporter: ?Exporter,
-
-runtime: *const Runtime,
-
 pub fn incInteraction(self: *Self) void {
     // very atomic operation.
     self.interaction_count += 1;
@@ -234,8 +234,7 @@ pub fn shouldGetAgentStructure(self: *const Self) bool {
 pub fn collectAgentStructure(self: *Self, agent_heap: Heap(Agent)) std.mem.Allocator.Error!void {
     const invocations = &(self.current_statement.profiling_invocations.?);
 
-    const max_agent_id = 512;
-    var agent_count_lst: [max_agent_id]AgentCount = undefined;
+    var agent_count_lst: [Memory.max_agent_structure_ids]AgentCount = undefined;
 
     const ids_count = agent_heap.getAgentStructure(&agent_count_lst);
 
