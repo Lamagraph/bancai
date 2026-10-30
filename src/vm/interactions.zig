@@ -118,12 +118,16 @@ pub fn evalEquation(c: *Core, eq: Equation) !void {
         });
     }
 
-    if (Config.debug_printing.benchmark) {
-        c.profiler.incInteraction();
+    defer {
+        if (Config.debug_printing.benchmark) {
+            c.profiler.incInteraction();
 
-        if (Config.debug_printing.print_memory_usage) {
-            if (c.profiler.shouldGetAgentStructure()) {
-                try c.profiler.collectAgentStructure(c.local_ctx.agent_heap);
+            if (Config.debug_printing.print_memory_usage) {
+                if (c.profiler.shouldGetAgentStructure()) {
+                    c.profiler.collectAgentStructure(c.local_ctx.agent_heap) catch |err| {
+                        std.log.err("{s} during collectAgentStructure", .{@errorName(err)});
+                    };
+                }
             }
         }
     }
