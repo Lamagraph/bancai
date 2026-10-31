@@ -11,7 +11,7 @@ const GlobalCtx = @import("../global_ctx.zig").GlobalCtx;
 const WorkerCtrl = @import("worker_ctrl.zig");
 const DoorBell = @import("door_bell.zig").DoorBell;
 const SigChannel = @import("signals.zig").SigChannel;
-const FoldState = @import("multi.zig").Multi.Transition.FoldState;
+const GatherState = @import("multi.zig").Multi.Transition.GatherState;
 
 pub const Slot = struct {
     ctrl: *WorkerCtrl,
@@ -70,7 +70,7 @@ pub const Slot = struct {
         return slot.core.id.worker;
     }
 
-    pub fn enterStop(slot: *Slot) VmError!void {
+    pub fn scatterStop(slot: *Slot) VmError!void {
         if (slot.thread == null) {
             return VmError.CoreFailed;
         }
@@ -78,7 +78,7 @@ pub const Slot = struct {
         _ = slot.sig_ch.putSignal(.stop_sig);
     }
 
-    pub fn enterEval(slot: *Slot) VmError!void {
+    pub fn scatterEval(slot: *Slot) VmError!void {
         if (slot.thread == null) {
             return VmError.CoreFailed;
         }
@@ -86,13 +86,13 @@ pub const Slot = struct {
         _ = slot.sig_ch.putSignal(.eval_sig);
     }
 
-    pub fn enterExit(slot: *Slot) VmError!void {
+    pub fn scatterExit(slot: *Slot) VmError!void {
         if (slot.thread != null) {
             _ = slot.sig_ch.putSignal(.kill_sig);
         }
     }
 
-    pub fn isStopped(slot: *Slot, state: *FoldState) VmError!void {
+    pub fn gatherStopped(slot: *Slot, state: *GatherState) VmError!void {
         const pending = slot.sig_ch.isPending();
 
         const stopped = switch (slot.ctrl.getState()) {
@@ -101,10 +101,10 @@ pub const Slot = struct {
             .applicant => !pending,
         };
 
-        if (!stopped) state.need_finish = false;
+        if (!stopped) state.all_done = false;
     }
 
-    pub fn isEvalDone(slot: *Slot, state: *FoldState) VmError!void {
+    pub fn gatherEvalDone(slot: *Slot, state: *GatherState) VmError!void {
         const pending = slot.sig_ch.isPending();
 
         const done = switch (slot.ctrl.getState()) {
@@ -117,19 +117,19 @@ pub const Slot = struct {
             .newborn => unreachable,
         };
 
-        if (!done) state.need_finish = false;
+        if (!done) state.all_done = false;
     }
 
-    pub fn wakeIfIdle(slot: *Slot) VmError!void {
+    pub fn rescatterIfIdle(slot: *Slot) VmError!void {
         if (slot.sig_ch.isPending()) return;
         if (slot.ctrl.getState() != .applicant) return;
 
         _ = slot.sig_ch.putSignal(.eval_sig);
     }
 
-    pub fn isExited(slot: *Slot, state: *FoldState) VmError!void {
+    pub fn gatherExited(slot: *Slot, state: *GatherState) VmError!void {
         if (slot.thread == null) return;
 
-        if (slot.ctrl.getState() != .corpse) state.need_finish = false;
+        if (slot.ctrl.getState() != .corpse) state.all_done = false;
     }
 };
