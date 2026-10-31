@@ -271,11 +271,6 @@ pub fn dupCopy(c: *Core, self: *Agent, ag: *Agent) BuiltinAgentError!void {
 
     _ = try copying_duplicator.copyNames(&ctx, ag);
 
-    try c.local_ctx.pushUrgent(EquationUnnormalized{
-        .lhs = self.ports[0],
-        .rhs = Value{ .agent = ag },
-    });
-
     for (1..arity) |port_idx| {
         const copy = try copying_duplicator.makeCopy(&ctx, port_idx, ag);
         try c.local_ctx.pushUrgent(EquationUnnormalized{
@@ -297,6 +292,13 @@ pub fn dupCopy(c: *Core, self: *Agent, ag: *Agent) BuiltinAgentError!void {
             .rhs = .{ .agent = outer.dup_agent },
         });
     }
+
+    // Publish the original last: once pushed, another core may consume `ag` while
+    // it is still being copied or rewired.
+    try c.local_ctx.pushUrgent(EquationUnnormalized{
+        .lhs = self.ports[0],
+        .rhs = Value{ .agent = ag },
+    });
 }
 
 pub fn tuple(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!void {
