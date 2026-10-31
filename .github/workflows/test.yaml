@@ -2,9 +2,13 @@ name: Tests
 
 on:
     push:
-        branches: [main]
     pull_request:
         branches: [main]
+
+# A newer push to the same branch cancels the run still in progress.
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
 
 jobs:
     check-formatting:
