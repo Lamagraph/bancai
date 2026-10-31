@@ -19,7 +19,7 @@ const Token = Lexer.Token;
 
 pub const Parser = @This();
 
-const Printing = @import("printing");
+const Printing = @import("profiler").Printing;
 
 /// Basically a diagnostic tool. Has context of the error in case
 /// Error.ErrorDuringParsing is returned.
@@ -775,30 +775,28 @@ test "free stmt" {
     }
 }
 
-const BufferedStringStream = Printing.BufferedStringStream;
-
-fn writeObject(stream: *BufferedStringStream, obj: Object) !void {
-    try stream.write("{s}", .{obj.name});
+fn writeObject(stream: *std.Io.Writer, obj: Object) !void {
+    try stream.print("{s}", .{obj.name});
     if (obj.portlist) |portlist| {
-        try stream.write("(", .{});
+        try stream.writeAll("(");
         for (portlist) |port| {
             try writeObject(stream, port.val);
         }
-        try stream.write(")", .{});
+        try stream.writeAll(")");
     }
 }
 
-fn toS_Expression_nested(expr: Expression, stream: *BufferedStringStream) !void {
+fn toS_Expression_nested(expr: Expression, stream: *std.Io.Writer) !void {
     switch (expr) {
         .atom => |obj| {
             try writeObject(stream, obj.val);
         },
         .binary_op => |binary_op| {
-            try stream.write("({s} ", .{binary_op.tag.symbol()});
+            try stream.print("({s} ", .{binary_op.tag.symbol()});
             try toS_Expression_nested(binary_op.lhs.val, stream);
-            try stream.write(" ", .{});
+            try stream.writeAll(" ");
             try toS_Expression_nested(binary_op.rhs.val, stream);
-            try stream.write(")", .{});
+            try stream.writeAll(")");
         },
         .unary_op => {},
     }
@@ -807,11 +805,11 @@ fn toS_Expression_nested(expr: Expression, stream: *BufferedStringStream) !void 
 // Returns a buffer that is bigger than the actual data
 fn toS_Expression(gpa: std.mem.Allocator, expr: Expression) ![:0]const u8 {
     const max_buffer_size = 512;
-    var stream = try BufferedStringStream.init(gpa, max_buffer_size);
+    var buffer: [max_buffer_size]u8 = undefined;
+    var stream: std.Io.Writer = .fixed(&buffer);
     try toS_Expression_nested(expr, &stream);
 
-    defer gpa.free(stream.buffer);
-    return try gpa.dupeSentinel(u8, stream.buffer[0..stream.offset], 0);
+    return try gpa.dupeSentinel(u8, stream.buffered(), 0);
 }
 
 test "hand-written expr to s-expr" {

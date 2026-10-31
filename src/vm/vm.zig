@@ -3,9 +3,10 @@ const std = @import("std");
 const AST = @import("ast");
 const BuildConfig = @import("config");
 const Compilation = @import("compilation");
+const Profiler = @import("profiler");
 const Instruction = Compilation.Instruction;
 const Diagnostic = Compilation.Diagnostic;
-const Printing = @import("printing");
+const Printing = Profiler.Printing;
 const Runtime = @import("shared_runtime");
 const Memory = Runtime.Memory;
 const EquationFetcher = Runtime.EquationFetcher;
@@ -23,6 +24,7 @@ pub const CoreSlaveCtrl = @import("core_slave_ctrl.zig");
 pub const Importer = @import("importer.zig");
 pub const Interaction = @import("interactions.zig");
 const Normalize = @import("normalize.zig");
+
 pub const normalizeEquation = Normalize.normalizeEquation;
 
 const VM = @This();
@@ -31,6 +33,7 @@ const Self = VM;
 const getUser = "getUser";
 
 config: Config,
+profiler: *Profiler,
 
 global_ctx: GlobalCtx,
 runtime: *Runtime,
@@ -193,6 +196,10 @@ pub const GlobalCtx = struct {
         try Normalize.pushEquation(self.name_heap, self.equation_fetcher, eq);
     }
 
+    pub fn pushEquationNormalized(self: GlobalCtx, eq: Types.Equation) !void {
+        try self.equation_fetcher.push(eq);
+    }
+
     pub fn pushUrgentEquation(self: GlobalCtx, eq: EquationUnnormalized) !void {
         try Normalize.pushUrgentEquation(self.name_heap, self.equation_fetcher, eq);
     }
@@ -212,6 +219,7 @@ fn createSlaveCores(
     global_ctx: GlobalCtx,
     core_num: usize,
     slave_ctrl: *CoreSlaveCtrl,
+    profiler: *Profiler,
 ) ![]Core {
     const cores: []Core = try runtime.gpa.alloc(Core, core_num);
     errdefer runtime.gpa.free(cores);
@@ -224,6 +232,7 @@ fn createSlaveCores(
             runtime,
             Core.CoreCtrl{ .slave = slave_ctrl },
             global_ctx.createLocal(runtime.gpa),
+            profiler,
         );
 
         available_core_id += 1;
@@ -239,7 +248,7 @@ pub fn deinit(self: *Self) void {
     if (self.master_ctrl) |master_ctrl| self.runtime.gpa.destroy(master_ctrl);
 }
 
-pub fn init(runtime: *Runtime, config: Config) !Self {
+pub fn init(runtime: *Runtime, config: Config, profiler: *Profiler) !Self {
     try config.isValid();
 
     const mode: Core.CoreMode = if (config.cores_num == 1) .singleThread else .multiThread;
@@ -264,6 +273,7 @@ pub fn init(runtime: *Runtime, config: Config) !Self {
                 runtime,
                 null,
                 try global_ctx.createVmLocal(),
+                profiler,
             );
         },
         .multiThread => {
@@ -278,6 +288,7 @@ pub fn init(runtime: *Runtime, config: Config) !Self {
                 runtime,
                 Core.CoreCtrl{ .master = created_master_ctrl },
                 try global_ctx.createVmLocal(),
+                profiler,
             );
 
             const created_slave_ctrl = try runtime.gpa.create(CoreSlaveCtrl);
@@ -285,7 +296,7 @@ pub fn init(runtime: *Runtime, config: Config) !Self {
             created_slave_ctrl.* = CoreSlaveCtrl.init();
             slave_ctrl = created_slave_ctrl;
 
-            cores = try createSlaveCores(runtime, global_ctx, config.cores_num, created_slave_ctrl);
+            cores = try createSlaveCores(runtime, global_ctx, config.cores_num, created_slave_ctrl, profiler);
             errdefer destroySlaveCores(cores, &global_ctx, runtime);
         },
     }
@@ -298,6 +309,7 @@ pub fn init(runtime: *Runtime, config: Config) !Self {
         .global_ctx = global_ctx,
         .runtime = runtime,
         .config = config,
+        .profiler = profiler,
     };
 }
 
@@ -445,12 +457,19 @@ inline fn ruleStmt(self: *Self, rule: AST.Rule) !void {
     }
 }
 
-inline fn prepareActivePair(self: *Self, ap: AST.ActivePair) !void {
+inline fn prepareActivePair(self: *Self, ap: AST.ActivePair) !?Profiler.Interaction {
     const lhs = try self.objToValue(ap.lhs.val);
     const rhs = try self.objToValue(ap.rhs.val);
     const eq = EquationUnnormalized{ .lhs = lhs, .rhs = rhs };
 
-    try self.global_ctx.pushEquation(eq);
+    const normalized = try Normalize.normalizeEquation(self.global_ctx.name_heap, eq) orelse return null;
+
+    try self.global_ctx.pushEquationNormalized(normalized);
+
+    return .{
+        .lhs = normalized.lhs.id,
+        .rhs = normalized.rhs.id,
+    };
 }
 
 inline fn execActivePairVmCore(self: *Self) !void {
@@ -479,21 +498,7 @@ inline fn execActivePairMode(self: *Self, mode: Core.CoreMode) !void {
 }
 
 inline fn execActivePair(self: *Self, mode: Core.CoreMode) !void {
-    if (BuildConfig.debug_printing.benchmark) {
-        const start = std.Io.Clock.awake.now(self.runtime.io);
-        try self.execActivePairMode(mode);
-        const end = std.Io.Clock.awake.now(self.runtime.io);
-
-        const duration = start.durationTo(end);
-        std.debug.print("Time passed: {}s\n", .{@as(f64, @floatFromInt(duration.toMilliseconds())) / 1000.0});
-    } else {
-        try self.execActivePairMode(mode);
-    }
-
-    if (BuildConfig.debug_printing.print_memory_usage) {
-        self.global_ctx.agent_heap.printUsage();
-        self.global_ctx.name_heap.printUsage();
-    }
+    try self.execActivePairMode(mode);
 }
 
 pub fn runProgram(self: *Self, program: AST.Program) !void {
@@ -504,8 +509,13 @@ pub fn runProgram(self: *Self, program: AST.Program) !void {
             .use_stmt => |import_path| try self.useStmt(import_path),
             .rule => |rule| try self.ruleStmt(rule),
             .active_pair => |ap| {
-                try self.prepareActivePair(ap);
+                const interaction = try self.prepareActivePair(ap) orelse continue;
+                self.profiler.startInteraction(interaction);
                 try self.execActivePair(self.vm_core.mode);
+                self.profiler.endInteraction(.{
+                    .agent_heap = self.global_ctx.agent_heap,
+                    .name_heap = self.global_ctx.name_heap,
+                });
             },
             else => unreachable,
         }

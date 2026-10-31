@@ -52,8 +52,8 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/debug.zig"),
     });
 
-    const mod_printing = b.addModule("printing", .{
-        .root_source_file = b.path("src/printing/printing.zig"),
+    const mod_profiler = b.addModule("profiler", .{
+        .root_source_file = b.path("src/profiler/profiler.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "debug", .module = mod_debug },
@@ -74,7 +74,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .imports = &.{
             .{ .name = "ast", .module = mod_ast },
-            .{ .name = "printing", .module = mod_printing },
+            .{ .name = "profiler", .module = mod_profiler },
             .{ .name = "shared_runtime", .module = mod_shared_runtime },
         },
     });
@@ -85,7 +85,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "compilation", .module = mod_compilation },
             .{ .name = "ast", .module = mod_ast },
-            .{ .name = "printing", .module = mod_printing },
+            .{ .name = "profiler", .module = mod_profiler },
             .{ .name = "shared_runtime", .module = mod_shared_runtime },
             .{ .name = "debug", .module = mod_debug },
         },
@@ -94,12 +94,12 @@ pub fn build(b: *std.Build) void {
     mod_shared_runtime.addImport("vm", mod_vm);
     mod_shared_runtime.addImport("compilation", mod_compilation);
     mod_compilation.addImport("vm", mod_vm);
-    mod_printing.addImport("shared_runtime", mod_shared_runtime);
-    mod_ast.addImport("printing", mod_printing);
+    mod_profiler.addImport("shared_runtime", mod_shared_runtime);
+    mod_ast.addImport("profiler", mod_profiler);
 
     const submodules: []const std.Build.Module.Import = &.{
         .{ .name = "ast", .module = mod_ast },
-        .{ .name = "printing", .module = mod_printing },
+        .{ .name = "profiler", .module = mod_profiler },
         .{ .name = "compilation", .module = mod_compilation },
         .{ .name = "shared_runtime", .module = mod_shared_runtime },
         .{ .name = "vm", .module = mod_vm },
@@ -140,11 +140,12 @@ pub fn build(b: *std.Build) void {
 
     const mod_options = options.createModule();
 
-    mod_printing.addImport("config", mod_options);
+    mod_profiler.addImport("config", mod_options);
     mod_shared_runtime.addImport("config", mod_options);
     mod_debug.addImport("config", mod_options);
     mod_compilation.addImport("config", mod_options);
     mod_vm.addImport("config", mod_options);
+    exe.root_module.addImport("config", mod_options);
 
     b.installArtifact(exe);
 

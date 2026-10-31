@@ -118,6 +118,20 @@ pub fn evalEquation(c: *Core, eq: Equation) !void {
         });
     }
 
+    defer {
+        if (Config.debug_printing.benchmark) {
+            c.profiler.incInteraction();
+
+            if (Config.debug_printing.print_memory_usage) {
+                if (c.profiler.shouldGetAgentStructure()) {
+                    c.profiler.collectAgentStructure(c.local_ctx.agent_heap) catch |err| {
+                        std.log.err("{s} during collectAgentStructure", .{@errorName(err)});
+                    };
+                }
+            }
+        }
+    }
+
     if (Builtin.isBuiltinAgent(lagent.id)) {
         const handler = Builtin.BuiltinTable.get(lagent.id).?;
         if (handler(c, lagent, ragent)) {

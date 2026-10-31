@@ -4,17 +4,23 @@ const Io = std.Io;
 const AST = @import("ast");
 const SharedRuntime = @import("shared_runtime");
 const VM = @import("vm");
+const Profiler = @import("profiler");
+const Config = @import("config");
 
 const clap = @import("clap");
+
+const interaction_profiler = if (Profiler.profile_memory) "--profiling-window <usize>     Specify window between profiling prints.\n" else "";
+
+const export_results = if (Profiler.any_analysis) "--export-csv-dir <str>         Specify directory to export profiling data.\n" else "";
 
 const help =
     \\-h, --help                     Display this help and exit.
     \\-t, --threads <usize>          Specify number of threads to be run on (this does not work yet).
     \\-m, --heap-size <usize>        Specify the initial size of the heap. Default: 1024
-    \\-f, --filepath <str>           Specify file to be interpreted. Default: ./tests/list_sorting.in
+    \\-f, --filepath <str>           Specify file to be interpreted.
     \\-w, --warmup                   In multiThread mode, have the master core take a first pass at reducing equations before handing off to the worker cores.
     \\
-;
+++ export_results ++ interaction_profiler ++ "\n";
 const params = clap.parseParamsComptime(help);
 
 const DEFAULT_HEAP_SIZE: usize = 1024;
@@ -44,12 +50,36 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
-    if (res.args.threads) |n|
-        std.debug.print("you specified -t {}, but it is not yet developed.\n", .{n});
+    if (res.args.threads) |n| {
+        std.log.err("you specified -t {}, but it is not yet developed.\n", .{n});
+        std.process.exit(1);
+    }
     const filepath = res.args.filepath orelse {
-        std.debug.print("File not specified. \nConsider using \"--help\".\n", .{});
+        std.log.err("File not specified. \nConsider using \"--help\".\n", .{});
         std.process.exit(1);
     };
+
+    const profiling_window: ?usize = profiling_window: {
+        if (Profiler.profile_memory) {
+            const maybe_window = res.args.@"profiling-window";
+            if (maybe_window != null and maybe_window.? == 0) {
+                std.log.err("Profiling window cannot be zero.", .{});
+                std.process.exit(1);
+            }
+            break :profiling_window maybe_window;
+        } else break :profiling_window null;
+    };
+
+    const export_path: ?[]const u8 = export_path: {
+        if (Profiler.any_analysis) {
+            if (res.args.@"export-csv-dir") |epath| {
+                break :export_path try std.fs.path.resolveAlloc(gpa, &.{epath});
+            } else break :export_path null;
+        } else {
+            break :export_path null;
+        }
+    };
+    defer if (export_path) |str| gpa.free(str);
 
     const contents = try Io.Dir.readFileAllocOptions(
         Io.Dir.cwd(),
@@ -92,7 +122,10 @@ pub fn main(init: std.process.Init) !void {
         .warmup = res.args.warmup != 0,
     };
 
-    var vm = try VM.init(&runtime, vm_cfg);
+    var vm_profiler: Profiler = .init(&runtime, profiling_window, export_path);
+    defer vm_profiler.deinit();
+
+    var vm = try VM.init(&runtime, vm_cfg, &vm_profiler);
     defer vm.deinit();
 
     vm.runProgram(program) catch |err| {
@@ -109,7 +142,7 @@ test "test modules" {
         AST,
         SharedRuntime,
         @import("compilation"),
-        @import("printing"),
+        Profiler,
         VM,
     };
 }

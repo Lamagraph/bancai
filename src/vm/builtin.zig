@@ -2,7 +2,6 @@
 const std = @import("std");
 const Core = @import("core.zig");
 const Types = @import("shared_runtime").Types;
-const Printing = @import("printing");
 const AST = @import("ast");
 
 const Agent = Types.Agent;
@@ -86,6 +85,11 @@ pub const builtin_agents = [_]BuiltinAgent{
     .{ .name = "Sub", .arity = 2, .impl = unbuiltin },
     .{ .name = "Mul", .arity = 2, .impl = unbuiltin },
     .{ .name = "Div", .arity = 2, .impl = unbuiltin },
+    // Order matters.
+    .{ .name = "AddRev", .arity = 2, .impl = unbuiltin },
+    .{ .name = "SubRev", .arity = 2, .impl = unbuiltin },
+    .{ .name = "MulRev", .arity = 2, .impl = unbuiltin },
+    .{ .name = "DivRev", .arity = 2, .impl = unbuiltin },
 
     // lists
     .{ .name = "Cons", .arity = 2, .impl = unbuiltin },
@@ -217,6 +221,9 @@ const copying_duplicator = struct {
                     } else {
                         agent.ports[idx] = Value{ .name = traversed };
                         if (ctx.names_map.getPtr(traversed)) |duplicating_name| {
+                            if (duplicating_name.* == .outer) {
+                                ctx.c.local_ctx.freeOneAgent(duplicating_name.outer.dup_agent);
+                            }
                             duplicating_name.* = .{
                                 .inner = .{
                                     .next_name = null,
@@ -322,8 +329,16 @@ pub fn number(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!void {
     const mult_id = comptime BuiltinNameMap.get("Mul").?;
     const div_id = comptime BuiltinNameMap.get("Div").?;
     const sub_id = comptime BuiltinNameMap.get("Sub").?;
+    const adder_rev_id = comptime BuiltinNameMap.get("AddRev").?;
+    const mult_rev_id = comptime BuiltinNameMap.get("MulRev").?;
+    const div_rev_id = comptime BuiltinNameMap.get("DivRev").?;
+    const sub_rev_id = comptime BuiltinNameMap.get("SubRev").?;
+    const rev_diff = adder_rev_id - adder_id;
 
-    if (other.id != adder_id and other.id != mult_id and other.id != div_id and other.id != sub_id)
+    const first_id = adder_id;
+    const last_id = div_rev_id;
+
+    if (other.id < first_id or other.id > last_id)
         return BuiltinAgentError.NoRuleSpecified;
 
     const self_special = self.ports[0].special;
@@ -342,7 +357,11 @@ pub fn number(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!void {
                     }
                 },
                 .agent => |agent| {
-                    return getSecondValue(agent.ports[0], _c);
+                    const result = getSecondValue(agent.ports[0], _c);
+                    if (result != null) {
+                        _c.local_ctx.freeOneAgent(agent);
+                    }
+                    return result;
                 },
                 .special => |special| return special,
             }
@@ -350,7 +369,15 @@ pub fn number(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!void {
     }.getSecondValue;
 
     const sv = getSecondValue(other.ports[1], c) orelse {
-        // We switch places: self with secondary argument port
+        // We switch places: self with secondary argument port. But we do need to use a reversed
+        // agent, because of div and sub.
+
+        if (other.id < first_id + rev_diff) {
+            other.id += rev_diff;
+        } else {
+            other.id -= rev_diff;
+        }
+
         const port = other.ports[1];
         other.ports[1] = .{ .agent = self };
         const eq = EquationUnnormalized{
@@ -368,6 +395,10 @@ pub fn number(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!void {
         mult_id => Special.mul(sv, self_special),
         div_id => Special.div(sv, self_special),
         sub_id => Special.sub(sv, self_special),
+        adder_rev_id => Special.add(self_special, sv),
+        mult_rev_id => Special.mul(self_special, sv),
+        div_rev_id => Special.div(self_special, sv),
+        sub_rev_id => Special.sub(self_special, sv),
         else => unreachable,
     };
 
