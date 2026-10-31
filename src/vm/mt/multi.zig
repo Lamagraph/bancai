@@ -1,7 +1,6 @@
 //! Multithread part of the VM: the core threads and their control.
 const std = @import("std");
 
-const Profiler = @import("profiler");
 const Runtime = @import("shared_runtime");
 
 const Core = @import("../core.zig");
@@ -51,7 +50,6 @@ pub const Multi = struct {
         slots_cnt: usize,
         bell: *DoorBell,
         gpa: std.mem.Allocator,
-        profiler: *Profiler,
     ) ![]Slot {
         const slots: []Slot = try gpa.alloc(Slot, slots_cnt);
         errdefer gpa.free(slots);
@@ -63,7 +61,7 @@ pub const Multi = struct {
         };
 
         for (slots) |*slot| {
-            try slot.init(available_core_id, runtime, bell, gpa, global_ctx, profiler);
+            try slot.init(available_core_id, runtime, bell, gpa, global_ctx);
             inited_cnt += 1;
 
             available_core_id += 1;
@@ -111,7 +109,6 @@ pub const Multi = struct {
         runtime: *Runtime,
         global_ctx: GlobalCtx,
         io: std.Io,
-        profiler: *Profiler,
     ) !Multi {
         if (slot_cnt > Config.max_core_cnt) {
             return VmError.NotSupported;
@@ -120,7 +117,7 @@ pub const Multi = struct {
         const bell = try bellInit(gpa, io);
         errdefer bellDeinit(bell, gpa);
 
-        const slots = try slotsInit(runtime, global_ctx, slot_cnt, bell, gpa, profiler);
+        const slots = try slotsInit(runtime, global_ctx, slot_cnt, bell, gpa);
         errdefer slotsDeinit(slots, global_ctx, gpa);
 
         const main_ctrl = try mainCtrlInit(gpa);

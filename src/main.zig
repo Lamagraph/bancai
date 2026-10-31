@@ -15,7 +15,7 @@ const export_results = if (Profiler.any_analysis) "--export-csv-dir <str>       
 
 const help =
     \\-h, --help                     Display this help and exit.
-    \\-t, --threads <usize>          Specify number of threads to be run on (this does not work yet).
+    \\-t, --threads <usize>          Specify number of threads to be run on. Profiling supports only 1. Default: 1
     \\-m, --heap-size <usize>        Specify the initial size of the heap. Default: 1024
     \\-f, --filepath <str>           Specify file to be interpreted.
     \\-w, --warmup                   In multiThread mode, have the main core take a first pass at reducing equations before handing off to the worker cores.
@@ -57,10 +57,6 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
-    if (res.args.threads) |n| {
-        std.log.err("you specified -t {}, but it is not yet developed.\n", .{n});
-        std.process.exit(1);
-    }
     const filepath = res.args.filepath orelse {
         std.log.err("File not specified. \nConsider using \"--help\".\n", .{});
         std.process.exit(1);
@@ -125,14 +121,17 @@ pub fn main(init: std.process.Init) !void {
 
     const vm_cfg: VM.Config = .{
         .heap_size = res.args.@"heap-size" orelse DEFAULT_HEAP_SIZE,
-        .cores_num = DEFAULT_CORES_NUM,
+        .cores_num = res.args.threads orelse DEFAULT_CORES_NUM,
         .warmup = res.args.warmup != 0,
     };
 
     var vm_profiler: Profiler = .init(&runtime, profiling_window, export_path);
     defer vm_profiler.deinit();
 
-    var vm = try VM.init(&runtime, vm_cfg, &vm_profiler);
+    var vm = VM.init(&runtime, vm_cfg, &vm_profiler) catch |err| {
+        std.log.err("Couldn't run on {} thread(s): {s}", .{ vm_cfg.cores_num, @errorName(err) });
+        std.process.exit(1);
+    };
     defer vm.deinit();
 
     vm.runProgram(program) catch |err| {

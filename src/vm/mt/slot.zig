@@ -1,7 +1,6 @@
 //! A worker core together with its thread and control channels.
 const std = @import("std");
 
-const Profiler = @import("profiler");
 const Runtime = @import("shared_runtime");
 
 const Core = @import("../core.zig");
@@ -40,7 +39,6 @@ pub const Slot = struct {
         bell: *DoorBell,
         gpa: std.mem.Allocator,
         global_ctx: GlobalCtx,
-        profiler: *Profiler,
     ) !void {
         const ctx = global_ctx.createLocal(gpa);
         errdefer global_ctx.destroyLocal(ctx, gpa);
@@ -63,7 +61,7 @@ pub const Slot = struct {
                 runtime,
                 Core.CoreCtrl{ .worker = ctrl },
                 ctx,
-                profiler,
+                null,
             ),
         };
     }

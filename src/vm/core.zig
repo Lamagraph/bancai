@@ -48,7 +48,8 @@ mode: CoreMode,
 // VM's statement handling now, so this can be const.
 runtime: *const Runtime,
 
-profiler: *Profiler,
+/// Null in multithread mode: profiling is supported only single-threaded.
+profiler: ?*Profiler,
 
 core_ctrl: ?CoreCtrl,
 local_ctx: LocalCtx,
@@ -136,7 +137,7 @@ pub fn init(
     runtime: *const Runtime,
     core_ctrl: ?CoreCtrl,
     local_ctx: LocalCtx,
-    profiler: *Profiler,
+    profiler: ?*Profiler,
 ) Self {
     return .{
         .id = core_id,
