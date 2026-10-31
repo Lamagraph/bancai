@@ -122,6 +122,13 @@ pub fn build(b: *std.Build) void {
     // for perf
     exe.root_module.omit_frame_pointer = b.option(bool, "no-omit-frame-pointer", "Do not omit frame pointer");
 
+    // for catching data races in multithread mode
+    if (b.option(bool, "tsan", "Build with ThreadSanitizer") orelse false) {
+        exe.use_llvm = true;
+        exe.root_module.sanitize_thread = true;
+        for (submodules) |submodule| submodule.module.sanitize_thread = true;
+    }
+
     const clap = b.dependency("clap", .{});
     exe.root_module.addImport("clap", clap.module("clap"));
 
