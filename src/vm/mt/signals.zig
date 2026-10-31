@@ -12,7 +12,7 @@ pub const Sig = enum(u8) {
     const by_priority = [_]Sig{ .kill_sig, .stop_sig, .eval_sig };
 
     inline fn mask(sig: Sig) SigBits {
-        return @as(SigBits, 1) << @intCast(@intFromEnum(sig));
+        return @as(SigBits, 1) << @intCast(@backingInt(sig));
     }
 };
 
