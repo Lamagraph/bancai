@@ -6,6 +6,7 @@ pub const DebugPrintConfig = struct {
     print_interactions: bool = false,
     print_memory_usage: bool = false,
     print_frees: bool = false,
+    print_core_stats: bool = false,
     benchmark: bool = false,
 };
 
@@ -121,6 +122,13 @@ pub fn build(b: *std.Build) void {
     // for perf
     exe.root_module.omit_frame_pointer = b.option(bool, "no-omit-frame-pointer", "Do not omit frame pointer");
 
+    // for catching data races in multithread mode
+    if (b.option(bool, "tsan", "Build with ThreadSanitizer") orelse false) {
+        exe.use_llvm = true;
+        exe.root_module.sanitize_thread = true;
+        for (submodules) |submodule| submodule.module.sanitize_thread = true;
+    }
+
     const clap = b.dependency("clap", .{});
     exe.root_module.addImport("clap", clap.module("clap"));
 
@@ -129,6 +137,7 @@ pub fn build(b: *std.Build) void {
         .print_interactions = b.option(bool, "print-interactions", "Print interaction points when they happen") orelse false,
         .print_memory_usage = b.option(bool, "print-memory-usage", "Print memory usage after top-level interactions") orelse false,
         .print_frees = b.option(bool, "print-frees", "Print message when a agent/name free happens") orelse false,
+        .print_core_stats = b.option(bool, "print-core-stats", "Print how many interactions each core evaluated") orelse false,
         .benchmark = b.option(bool, "benchmark", "Print time spent in interactions") orelse false,
     };
 
@@ -137,6 +146,9 @@ pub fn build(b: *std.Build) void {
 
     const heap_kind = b.option(HeapKind, "heap", "Which heap implementation to use") orelse .objpool;
     options.addOption(HeapKind, "heap", heap_kind);
+
+    const check_name_arrivals = b.option(bool, "check-name-arrivals", "Assert that every name is visited at most twice") orelse (optimize == .debug);
+    options.addOption(bool, "check_name_arrivals", check_name_arrivals);
 
     const mod_options = options.createModule();
 

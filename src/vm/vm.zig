@@ -9,7 +9,6 @@ const Diagnostic = Compilation.Diagnostic;
 const Printing = Profiler.Printing;
 const Runtime = @import("shared_runtime");
 const Memory = Runtime.Memory;
-const EquationFetcher = Runtime.EquationFetcher;
 const Types = Runtime.Types;
 const Agent = Types.Agent;
 const Value = Types.Value;
@@ -17,258 +16,110 @@ const Name = Types.Name;
 const Special = Types.Special;
 const EquationUnnormalized = Types.EquationUnnormalized;
 
-pub const Builtin = @import("builtin.zig");
 pub const Core = @import("core.zig");
-pub const CoreMasterCtrl = @import("core_master_ctrl.zig");
-pub const CoreSlaveCtrl = @import("core_slave_ctrl.zig");
+const CoreMode = @import("core_types.zig").CoreMode;
+const CoreId = @import("core_types.zig").CoreId;
+const CoreRc = @import("core_types.zig").CoreRc;
+const CoreRole = @import("core_types.zig").CoreRole;
+const VmError = @import("core_types.zig").Error;
+
+pub const Config = @import("config.zig").Config;
+
+pub const MainCtrl = @import("mt/main_ctrl.zig");
+pub const WorkerCtrl = @import("mt/worker_ctrl.zig");
+pub const WorkerState = @import("mt/worker_ctrl.zig").State;
+
+pub const GlobalCtx = @import("global_ctx.zig").GlobalCtx;
+const Multi = @import("mt/multi.zig").Multi;
+const Slot = @import("mt/slot.zig").Slot;
+
+pub const Builtin = @import("builtin.zig");
 pub const Importer = @import("importer.zig");
 pub const Interaction = @import("interactions.zig");
-const Normalize = @import("normalize.zig");
-
-pub const normalizeEquation = Normalize.normalizeEquation;
+const Link = @import("link.zig");
 
 const VM = @This();
 const Self = VM;
 
-const getUser = "getUser";
+const log = std.log.scoped(.vm);
 
-config: Config,
+cfg: Config,
 profiler: *Profiler,
 
 global_ctx: GlobalCtx,
 runtime: *Runtime,
 
-master_ctrl: ?*CoreMasterCtrl,
-slave_ctrl: ?*CoreSlaveCtrl,
+main_core: Core,
+vmode: VMode,
 
-vm_core: Core,
-cores: []Core,
+const VMode = union(enum) {
+    const Single = void;
 
-var available_core_id: usize = 0;
+    s: Single,
+    m: Multi,
 
-pub const Config = struct {
-    pub const Error = error{
-        NotSupported,
-    };
-
-    cores_num: usize,
-    heap_size: usize,
-
-    warmup: bool = false,
-
-    pub fn isValid(cfg: *const Config) Error!void {
-        // TODO:(kogora): multithread version
-        if (cfg.cores_num != 1) {
-            return Error.NotSupported;
-        }
-    }
-};
-
-pub const GlobalCtx = struct {
-    agent_heap: Memory.Heap(Agent),
-    name_heap: Memory.Heap(Name),
-    equation_fetcher: EquationFetcher,
-
-    fn HeapType(comptime T: type) type {
-        switch (BuildConfig.heap) {
-            .basic => return Memory.BasicHeap(T),
-            .objpool => return Memory.ObjPool(T),
-        }
+    fn initS() VMode {
+        return .{ .s = {} };
     }
 
-    fn heapInit(comptime T: type, heap_size: usize, gpa: std.mem.Allocator) !Memory.Heap(T) {
-        const basic_heap = try gpa.create(HeapType(T));
-
-        basic_heap.* = switch (BuildConfig.heap) {
-            .basic => try Memory.BasicHeap(T).init(gpa, heap_size),
-            .objpool => try Memory.ObjPool(T).init(gpa, heap_size),
-        };
-
-        return basic_heap.heap();
-    }
-
-    fn heapDeinit(comptime T: type, heap: Memory.Heap(T), gpa: std.mem.Allocator) void {
-        const basic_heap: *HeapType(T) = @ptrCast(@alignCast(heap.ptr));
-
-        basic_heap.deinit(gpa);
-        gpa.destroy(basic_heap);
-    }
-
-    fn equationFetcherInit(gpa: std.mem.Allocator) !EquationFetcher {
-        const FetcherType = EquationFetcher.ThreeDequeEquationFetcher;
-        const three_deque_equation_fetcher = try gpa.create(FetcherType);
-        three_deque_equation_fetcher.* = .init(gpa);
-
-        return three_deque_equation_fetcher.equationFetcher();
-    }
-
-    fn equationFetcherDeinit(equation_fetcher: EquationFetcher, gpa: std.mem.Allocator) void {
-        const FetcherType = EquationFetcher.ThreeDequeEquationFetcher;
-        const three_deque_equation_fetcher: *FetcherType = @ptrCast(@alignCast(equation_fetcher.ptr));
-        three_deque_equation_fetcher.deinit();
-        gpa.destroy(three_deque_equation_fetcher);
-    }
-
-    fn getHeapUser(comptime T: type, heap: Memory.Heap(T), gpa: std.mem.Allocator) Memory.Heap(T) {
-        _ = gpa;
-        const Concrete = HeapType(T);
-        if (@hasDecl(Concrete, getUser)) {
-            const concrete: *Concrete = @ptrCast(@alignCast(heap.ptr));
-            return concrete.getUser();
-        }
-
-        // TODO:(kogora) mb should be unreachable
-        return heap;
-    }
-
-    fn getFetcherUser(fetcher: EquationFetcher, gpa: std.mem.Allocator) EquationFetcher {
-        _ = gpa;
-        const Concrete = EquationFetcher.ThreeDequeEquationFetcher;
-        if (@hasDecl(Concrete, getUser)) {
-            const concrete: *Concrete = @ptrCast(@alignCast(fetcher.ptr));
-            return concrete.getUser();
-        }
-        return fetcher;
-    }
-
-    pub fn init(runtime: *Runtime, config: Config) !GlobalCtx {
-        const agent_heap = try heapInit(Agent, config.heap_size, runtime.gpa);
-        errdefer heapDeinit(Agent, agent_heap, runtime.gpa);
-
-        const name_heap = try heapInit(Name, config.heap_size, runtime.gpa);
-        errdefer heapDeinit(Name, name_heap, runtime.gpa);
-
-        const equation_fetcher = try equationFetcherInit(runtime.gpa);
-        errdefer equationFetcherDeinit(equation_fetcher, runtime.gpa);
-
-        return .{
-            .agent_heap = agent_heap,
-            .name_heap = name_heap,
-            .equation_fetcher = equation_fetcher,
-        };
-    }
-
-    pub fn deinit(self: *GlobalCtx, gpa: std.mem.Allocator) void {
-        equationFetcherDeinit(self.equation_fetcher, gpa);
-        heapDeinit(Name, self.name_heap, gpa);
-        heapDeinit(Agent, self.agent_heap, gpa);
-    }
-
-    pub fn createLocal(self: GlobalCtx, gpa: std.mem.Allocator) Core.LocalCtx {
-        return .{
-            .agent_heap = getHeapUser(Agent, self.agent_heap, gpa),
-            .name_heap = getHeapUser(Name, self.name_heap, gpa),
-            .equation_fetcher = getFetcherUser(self.equation_fetcher, gpa),
-        };
-    }
-
-    pub fn createVmLocal(self: GlobalCtx) !Core.LocalCtx {
-        const S = struct {
-            var exist: bool = false;
-        };
-
-        if (S.exist) {
-            return error.AccessDenied;
-        }
-
-        S.exist = true;
-        return .{
-            .agent_heap = self.agent_heap,
-            .name_heap = self.name_heap,
-            .equation_fetcher = self.equation_fetcher,
-        };
-    }
-
-    pub fn destroyLocal(self: *GlobalCtx, local_ctx: Core.LocalCtx, gpa: std.mem.Allocator) void {
-        _ = self;
-        _ = local_ctx;
-        _ = gpa;
-    }
-
-    pub fn balanceEquations(self: *GlobalCtx) void {
-        _ = self;
-        // TODO:(kogora) equation balancer should be implemented as a part (and responsibility)
-        // of the concrete fetcher, but it should provide an endpoint for vm-using. The function
-        // is a wrapper above that endpoint.
-    }
-
-    pub fn pushEquation(self: GlobalCtx, eq: EquationUnnormalized) !void {
-        try Normalize.pushEquation(self.name_heap, self.equation_fetcher, eq);
-    }
-
-    pub fn pushEquationNormalized(self: GlobalCtx, eq: Types.Equation) !void {
-        try self.equation_fetcher.push(eq);
-    }
-
-    pub fn pushUrgentEquation(self: GlobalCtx, eq: EquationUnnormalized) !void {
-        try Normalize.pushUrgentEquation(self.name_heap, self.equation_fetcher, eq);
-    }
-};
-
-fn destroySlaveCores(
-    cores: []Core,
-    global_ctx: *GlobalCtx,
-    runtime: *Runtime,
-) void {
-    for (cores) |*c| global_ctx.destroyLocal(c.local_ctx, runtime.gpa);
-    runtime.gpa.free(cores);
-}
-
-fn createSlaveCores(
-    runtime: *Runtime,
-    global_ctx: GlobalCtx,
-    core_num: usize,
-    slave_ctrl: *CoreSlaveCtrl,
-    profiler: *Profiler,
-) ![]Core {
-    const cores: []Core = try runtime.gpa.alloc(Core, core_num);
-    errdefer runtime.gpa.free(cores);
-
-    const start_id = available_core_id;
-    for (cores, start_id..) |*c, core_id| {
-        c.* = Core.init(
-            Core.CoreId{ .slave = @intCast(core_id) },
-            Core.CoreMode.singleThread,
+    fn initM(
+        cfg: Config,
+        runtime: *Runtime,
+        gpa: std.mem.Allocator,
+        global_ctx: GlobalCtx,
+    ) !VMode {
+        return .{ .m = try Multi.init(
+            cfg.cores_num,
+            gpa,
             runtime,
-            Core.CoreCtrl{ .slave = slave_ctrl },
-            global_ctx.createLocal(runtime.gpa),
-            profiler,
-        );
-
-        available_core_id += 1;
+            global_ctx,
+            runtime.io,
+        ) };
     }
 
-    return cores;
-}
+    fn deinit(
+        self: *VMode,
+        gpa: std.mem.Allocator,
+        global_ctx: GlobalCtx,
+    ) void {
+        switch (self.*) {
+            .s => {},
+            .m => |*m| {
+                m.deinit(global_ctx, gpa);
+            },
+        }
+    }
+};
 
 pub fn deinit(self: *Self) void {
-    destroySlaveCores(self.cores, &self.global_ctx, self.runtime);
+    switch (self.vmode) {
+        .s => {},
+        .m => |*m| {
+            std.debug.assert(!m.anyCoreThreadSpawned());
+
+            m.deinit(self.global_ctx, self.runtime.gpa);
+        },
+    }
+
     self.global_ctx.deinit(self.runtime.gpa);
-    if (self.slave_ctrl) |slave_ctrl| self.runtime.gpa.destroy(slave_ctrl);
-    if (self.master_ctrl) |master_ctrl| self.runtime.gpa.destroy(master_ctrl);
 }
 
-pub fn init(runtime: *Runtime, config: Config, profiler: *Profiler) !Self {
-    try config.isValid();
+pub fn init(runtime: *Runtime, cfg: Config, profiler: *Profiler) !Self {
+    try cfg.isValid();
 
-    const mode: Core.CoreMode = if (config.cores_num == 1) .singleThread else .multiThread;
+    const mode = cfg.getMode();
 
-    // TODO:(kogora): multithread version
-    std.debug.assert(mode == Core.CoreMode.singleThread);
+    var main_core: Core = undefined;
+    var vmode: VMode = undefined;
 
-    var vm_core: Core = undefined;
-    var master_ctrl: ?*CoreMasterCtrl = null;
-
-    var slave_ctrl: ?*CoreSlaveCtrl = null;
-    var cores: []Core = &.{};
-
-    var global_ctx = try GlobalCtx.init(runtime, config);
+    var global_ctx = try GlobalCtx.init(runtime, cfg);
     errdefer global_ctx.deinit(runtime.gpa);
 
     switch (mode) {
         .singleThread => {
-            vm_core = Core.init(
-                Core.CoreId{ .master = {} },
+            vmode = VMode.initS();
+            main_core = Core.init(
+                CoreId{ .main = {} },
                 mode,
                 runtime,
                 null,
@@ -277,38 +128,31 @@ pub fn init(runtime: *Runtime, config: Config, profiler: *Profiler) !Self {
             );
         },
         .multiThread => {
-            const created_master_ctrl = try runtime.gpa.create(CoreMasterCtrl);
-            errdefer runtime.gpa.destroy(created_master_ctrl);
-            created_master_ctrl.* = CoreMasterCtrl.init();
-            master_ctrl = created_master_ctrl;
+            if (Profiler.any_analysis) {
+                log.err("profiling is not supported in multithread mode", .{});
+                return VmError.NotSupported;
+            }
 
-            vm_core = Core.init(
-                Core.CoreId{ .master = {} },
+            vmode = try VMode.initM(cfg, runtime, runtime.gpa, global_ctx);
+            errdefer vmode.deinit(runtime.gpa, global_ctx);
+
+            main_core = Core.init(
+                CoreId{ .main = {} },
                 mode,
                 runtime,
-                Core.CoreCtrl{ .master = created_master_ctrl },
+                Core.CoreCtrl{ .main = vmode.m.main_ctrl },
                 try global_ctx.createVmLocal(),
-                profiler,
+                null,
             );
-
-            const created_slave_ctrl = try runtime.gpa.create(CoreSlaveCtrl);
-            errdefer runtime.gpa.destroy(created_slave_ctrl);
-            created_slave_ctrl.* = CoreSlaveCtrl.init();
-            slave_ctrl = created_slave_ctrl;
-
-            cores = try createSlaveCores(runtime, global_ctx, config.cores_num, created_slave_ctrl, profiler);
-            errdefer destroySlaveCores(cores, &global_ctx, runtime);
         },
     }
 
     return .{
-        .vm_core = vm_core,
-        .cores = cores,
-        .master_ctrl = master_ctrl,
-        .slave_ctrl = slave_ctrl,
+        .main_core = main_core,
+        .vmode = vmode,
         .global_ctx = global_ctx,
         .runtime = runtime,
-        .config = config,
+        .cfg = cfg,
         .profiler = profiler,
     };
 }
@@ -345,7 +189,7 @@ fn objToValueAgent(self: *Self, obj: AST.Object) anyerror!Value {
 fn objToValueName(self: *Self, obj: AST.Object) !Value {
     const name = try self.global_ctx.name_heap.allocOne();
 
-    name.* = .{ .port = null };
+    name.* = .empty;
     try self.runtime.associated_names.put(obj.name, name);
 
     return .{ .name = name };
@@ -367,13 +211,7 @@ fn objToValue(
     if (self.runtime.associated_names.getPtr(obj.name)) |maybe_name| {
         if (maybe_name.*) |name| {
             maybe_name.* = null;
-            if (name.port) |port| {
-                defer self.global_ctx.name_heap.freeOne(name);
-
-                return port;
-            } else {
-                return .{ .name = name };
-            }
+            return (Value{ .name = name }).resolve(self.global_ctx.name_heap);
         } else {
             // Implicitly reusing
         }
@@ -385,7 +223,7 @@ fn objToValue(
 inline fn printStmt(self: *Self, name_to_print: AST.Name) !void {
     if (self.runtime.associated_names.get(name_to_print.val)) |maybe_name| {
         if (maybe_name) |name| {
-            if (name.port) |port| {
+            if (name.load()) |port| {
                 try Printing.tryPrint(self.runtime, self.runtime.gpa, port);
             } else {
                 std.debug.print("<MOVED>\n", .{});
@@ -404,12 +242,7 @@ inline fn freeStmt(self: *Self, names: []const AST.Name) !void {
         if (self.runtime.associated_names.get(name)) |maybe_wire| {
             defer _ = self.runtime.associated_names.remove(name);
             if (maybe_wire) |wire| {
-                const traversed = wire.traverseFree(self.vm_core.local_ctx.name_heap);
-                defer self.vm_core.local_ctx.name_heap.freeOne(traversed);
-                if (traversed.port) |port| {
-                    // of course, there shouldn't be anything other than an agent
-                    try Builtin.Eraser.erase(&self.vm_core, port.agent);
-                }
+                try Builtin.Eraser.eraseValue(&self.main_core, .{ .name = wire });
             }
         } else {
             std.debug.print("Trying to free non-existent name {s}\n", .{name});
@@ -462,7 +295,7 @@ inline fn prepareActivePair(self: *Self, ap: AST.ActivePair) !?Profiler.Interact
     const rhs = try self.objToValue(ap.rhs.val);
     const eq = EquationUnnormalized{ .lhs = lhs, .rhs = rhs };
 
-    const normalized = try Normalize.normalizeEquation(self.global_ctx.name_heap, eq) orelse return null;
+    const normalized = Link.link(self.global_ctx.name_heap, eq.lhs, eq.rhs) orelse return null;
 
     try self.global_ctx.pushEquationNormalized(normalized);
 
@@ -473,35 +306,87 @@ inline fn prepareActivePair(self: *Self, ap: AST.ActivePair) !?Profiler.Interact
 }
 
 inline fn execActivePairVmCore(self: *Self) !void {
-    _ = try self.vm_core.runEquations();
+    try self.main_core.eval();
 }
 
 inline fn execActivePairMultiCores(self: *Self) !void {
-    if (self.config.warmup) {
-        const rc = try self.vm_core.runEquations();
-        if (rc == Core.CoreRc.finishRc) {
-            return;
-        }
-
+    // TODO:(kogora) implement warmup
+    std.debug.assert(!self.cfg.warmup);
+    if (self.cfg.warmup) {
+        try self.main_core.eval();
         self.global_ctx.balanceEquations();
+        return;
     }
 
-    // TODO:(kogora): multithread version
-    _ = try self.cores[0].runEquations();
+    try self.vmode.m.eval();
 }
 
-inline fn execActivePairMode(self: *Self, mode: Core.CoreMode) !void {
+inline fn execActivePairMode(self: *Self, mode: CoreMode) !void {
     switch (mode) {
         .singleThread => try self.execActivePairVmCore(),
         .multiThread => try self.execActivePairMultiCores(),
     }
 }
 
-inline fn execActivePair(self: *Self, mode: Core.CoreMode) !void {
+inline fn execActivePair(self: *Self, mode: CoreMode) !void {
     try self.execActivePairMode(mode);
 }
 
+fn startCores(self: *Self) !void {
+    if (self.cfg.getMode() != .multiThread) {
+        return;
+    }
+
+    const m: *Multi = &self.vmode.m;
+    log.info("starting {} core(s)", .{m.slots.len});
+
+    try m.start();
+
+    log.info("{} core(s) started", .{m.slots.len});
+}
+
+fn stopCores(self: *Self) void {
+    if (self.cfg.getMode() != .multiThread) {
+        return;
+    }
+
+    const m: *Multi = &self.vmode.m;
+    log.info("stopping {} core(s)", .{m.slots.len});
+
+    m.exit();
+
+    log.info("{} core(s) stopped", .{m.slots.len});
+}
+
+fn printCoreStats(self: *Self) void {
+    if (!BuildConfig.debug_printing.print_core_stats) return;
+
+    var total = self.main_core.interactions;
+    const slots: []Slot = switch (self.vmode) {
+        .s => &.{},
+        .m => |m| m.slots,
+    };
+    for (slots) |*slot| total += slot.core.interactions;
+
+    printCoreStat("main", self.main_core.interactions, total);
+    for (slots) |*slot| {
+        var buf: [16]u8 = undefined;
+        const name = std.fmt.bufPrint(&buf, "{}", .{slot.rawId()}) catch unreachable;
+        printCoreStat(name, slot.core.interactions, total);
+    }
+    std.debug.print("total: {} interactions\n", .{total});
+}
+
+fn printCoreStat(name: []const u8, interactions: u64, total: u64) void {
+    const share = if (total == 0) 0 else @as(f64, @floatFromInt(interactions)) * 100 / @as(f64, @floatFromInt(total));
+    std.debug.print("core-{s}: {} interactions ({d:.1}%)\n", .{ name, interactions, share });
+}
+
 pub fn runProgram(self: *Self, program: AST.Program) !void {
+    defer self.printCoreStats();
+    try self.startCores();
+    defer self.stopCores();
+
     for (program.statements) |statement| {
         switch (statement.val) {
             .print_stmt => |name_to_print| try self.printStmt(name_to_print),
@@ -511,7 +396,7 @@ pub fn runProgram(self: *Self, program: AST.Program) !void {
             .active_pair => |ap| {
                 const interaction = try self.prepareActivePair(ap) orelse continue;
                 self.profiler.startInteraction(interaction);
-                try self.execActivePair(self.vm_core.mode);
+                try self.execActivePair(self.main_core.mode);
                 self.profiler.endInteraction(.{
                     .agent_heap = self.global_ctx.agent_heap,
                     .name_heap = self.global_ctx.name_heap,
@@ -520,4 +405,8 @@ pub fn runProgram(self: *Self, program: AST.Program) !void {
             else => unreachable,
         }
     }
+}
+
+test {
+    _ = @import("mt/signals.zig");
 }

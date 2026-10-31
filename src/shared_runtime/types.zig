@@ -1,6 +1,8 @@
 //! Module that contains basic types for interaction nets logic.
 const std = @import("std");
 
+const Config = @import("config");
+
 const memory = @import("memory.zig");
 
 const number_of_ports = 10;
@@ -15,62 +17,65 @@ pub const Agent = struct {
 };
 
 pub const Name = struct {
-    port: ?Value,
+    box: std.atomic.Value(usize),
+    arrivals: if (count_arrivals) std.atomic.Value(u8) else void,
 
-    /// This procedure makes it so that the chain starting with
-    /// "name" (argument) is shortened to a direct link (or null in case there is no agent).
-    /// Intermediate names are freed.
-    ///
-    /// Example: a -> b -> c -> Agent() >> unchain(a); >> a -> Agent()
-    ///          a -> b -> c -> null    >> unchain(a); >> a -> null
-    pub fn unchain(name: *Name, heap: memory.Heap(Name)) void {
-        var node = if ((name.port orelse return) == .name) name.port.?.name else return;
-        while (node.port) |port| {
-            if (port == .name) {
-                heap.freeOne(node);
-                node = port.name;
-            } else break;
-        }
+    pub const empty: Name = .{
+        .box = .init(empty_box),
+        .arrivals = if (count_arrivals) .init(0) else {},
+    };
 
-        name.port = node.port;
-        heap.freeOne(node);
+    const count_arrivals = Config.check_name_arrivals;
+
+    const empty_box: usize = 0;
+    const name_tag: usize = 1;
+
+    comptime {
+        std.debug.assert(@alignOf(Agent) > name_tag and @alignOf(Name) > name_tag);
+        std.debug.assert(count_arrivals or @sizeOf(Name) == @sizeOf(usize));
+    }
+
+    fn encode(val: Value) usize {
+        return switch (val) {
+            .agent => |agent| @intFromPtr(agent),
+            .name => |name| @intFromPtr(name) | name_tag,
+            .special => unreachable,
+        };
+    }
+
+    fn decode(word: usize) ?Value {
+        if (word == empty_box) return null;
+        if (word & name_tag != 0) return .{ .name = @ptrFromInt(word & ~name_tag) };
+        return .{ .agent = @ptrFromInt(word) };
+    }
+
+    pub fn assertArrival(name: *Name) void {
+        if (!count_arrivals) return;
+        const prev = name.arrivals.fetchAdd(1, .monotonic);
+        if (prev >= 2) @panic("name visited more than twice");
+    }
+
+    pub fn swap(name: *Name, val: Value) ?Value {
+        return decode(name.box.swap(encode(val), .acq_rel));
+    }
+
+    pub fn load(name: *const Name) ?Value {
+        return decode(name.box.load(.acquire));
     }
 
     /// This function is used to check if the name chain
     /// contains an agent at the end or not
     /// without changing the chain
-    pub fn unwind(name: *Name) ?*Agent {
+    pub fn unwind(name: *const Name) ?*Agent {
         var node = name;
-        while (node.port) |port| {
-            switch (port) {
-                .name => |new_name| {
-                    node = new_name;
-                },
+        while (node.load()) |val| {
+            switch (val) {
+                .name => |next| node = next,
                 .agent => |agent| return agent,
-                else => unreachable,
+                .special => unreachable,
             }
         }
         return null;
-    }
-
-    /// Like unchain, but instead returns the last in the chain, erasing every name before it.
-    ///
-    /// a -> b -> c -> Agent() >> traverseFree(a); >> c -> Agent()
-    pub fn traverseFree(name: *Name, heap: memory.Heap(Name)) *Name {
-        var node = name;
-        while (node.port) |port| {
-            if (port == .name) {
-                heap.freeOne(node);
-                node = port.name;
-            } else {
-                break;
-            }
-        }
-        return node;
-    }
-
-    pub fn is_open(name: *Name) bool {
-        return if (name.port) |_| false else true;
     }
 };
 
@@ -182,6 +187,16 @@ pub const Value = union(enum) {
             else => unreachable,
         };
     }
+
+    pub fn resolve(val: Value, heap: memory.Heap(Name)) Value {
+        var cur = val;
+        while (cur == .name) {
+            const parked = cur.name.load() orelse break;
+            heap.freeOne(cur.name);
+            cur = parked;
+        }
+        return cur;
+    }
 };
 
 pub const EquationUnnormalized = struct {
@@ -194,7 +209,7 @@ pub const Equation = struct {
     rhs: *Agent,
 };
 
-test "unchain" {
+test "resolve" {
     const gpa = std.testing.allocator;
 
     var basic_name_heap: memory.BasicHeap(Name) = try .init(gpa, 20);
@@ -205,20 +220,44 @@ test "unchain" {
 
     var name_heap = basic_name_heap.heap();
     var agent_heap = basic_agent_heap.heap();
-    // a -> b -> c -> Agent() ===> a -> Agent()
+    const Optional = memory.BasicHeap(Name).Optional;
 
     const a = try name_heap.allocOne();
     const b = try name_heap.allocOne();
-    const c = try name_heap.allocOne();
     const agent = try agent_heap.allocOne();
     agent.* = .{ .id = 0 };
-    a.port = .{ .name = b };
-    b.port = .{ .name = c };
-    c.port = .{ .agent = agent };
-    a.unchain(name_heap);
-    // b and c get cleaned, a -> agent
-    const Optional = memory.BasicHeap(Name).Optional;
+    a.* = .empty;
+    b.* = .empty;
+    try std.testing.expect(a.swap(.{ .name = b }) == null);
+    try std.testing.expect(b.swap(.{ .agent = agent }) == null);
+    try std.testing.expectEqual(agent, a.unwind().?);
+
+    const resolved = (Value{ .name = a }).resolve(name_heap);
+    try std.testing.expectEqual(agent, resolved.agent);
+    try std.testing.expectEqual(.free, @as(*Optional, @fieldParentPtr("item", a)).*);
     try std.testing.expectEqual(.free, @as(*Optional, @fieldParentPtr("item", b)).*);
-    try std.testing.expectEqual(.free, @as(*Optional, @fieldParentPtr("item", c)).*);
-    try std.testing.expectEqual(a.port.?.agent, agent);
+
+    const c = try name_heap.allocOne();
+    c.* = .empty;
+    try std.testing.expectEqual(c, (Value{ .name = c }).resolve(name_heap).name);
+    try std.testing.expect(c.unwind() == null);
+}
+
+test "Name: second arrival gets the parked value" {
+    var a: Agent = .{ .id = 0 };
+    var b: Agent = .{ .id = 1 };
+    var n: Name = .empty;
+
+    try std.testing.expect(n.load() == null);
+    try std.testing.expect(n.swap(.{ .agent = &a }) == null);
+    try std.testing.expectEqual(&a, n.swap(.{ .agent = &b }).?.agent);
+}
+
+test "Name: arrivals are counted when enabled" {
+    if (!Name.count_arrivals) return error.SkipZigTest;
+
+    var n: Name = .empty;
+    n.assertArrival();
+    n.assertArrival();
+    try std.testing.expectEqual(2, n.arrivals.load(.monotonic));
 }

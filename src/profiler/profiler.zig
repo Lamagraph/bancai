@@ -275,7 +275,14 @@ pub fn endInteraction(self: *Self, ctx: Context) void {
         self.current_statement.duration = self.timer.stop();
     }
 
-    if (profile_memory) {
+    // The last interaction may have already collected it on a profiling window boundary.
+    const invocations = self.current_statement.profiling_invocations;
+    const already_collected = if (invocations) |list|
+        list.items.len != 0 and list.items[list.items.len - 1].interaction_count == self.interaction_count
+    else
+        false;
+
+    if (profile_memory and !already_collected) {
         self.collectAgentStructure(ctx.agent_heap) catch |err| {
             std.debug.print("Couldn't collect post-interaction agent structure: {s}\n", .{@errorName(err)});
         };
