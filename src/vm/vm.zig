@@ -21,6 +21,7 @@ const CoreMode = @import("core_types.zig").CoreMode;
 const CoreId = @import("core_types.zig").CoreId;
 const CoreRc = @import("core_types.zig").CoreRc;
 const CoreRole = @import("core_types.zig").CoreRole;
+const VmError = @import("core_types.zig").Error;
 
 pub const Config = @import("config.zig").Config;
 
@@ -66,7 +67,6 @@ const VMode = union(enum) {
         runtime: *Runtime,
         gpa: std.mem.Allocator,
         global_ctx: GlobalCtx,
-        profiler: *Profiler,
     ) !VMode {
         return .{ .m = try Multi.init(
             cfg.cores_num,
@@ -74,7 +74,6 @@ const VMode = union(enum) {
             runtime,
             global_ctx,
             runtime.io,
-            profiler,
         ) };
     }
 
@@ -129,7 +128,12 @@ pub fn init(runtime: *Runtime, cfg: Config, profiler: *Profiler) !Self {
             );
         },
         .multiThread => {
-            vmode = try VMode.initM(cfg, runtime, runtime.gpa, global_ctx, profiler);
+            if (Profiler.any_analysis) {
+                log.err("profiling is not supported in multithread mode", .{});
+                return VmError.NotSupported;
+            }
+
+            vmode = try VMode.initM(cfg, runtime, runtime.gpa, global_ctx);
             errdefer vmode.deinit(runtime.gpa, global_ctx);
 
             main_core = Core.init(
@@ -138,7 +142,7 @@ pub fn init(runtime: *Runtime, cfg: Config, profiler: *Profiler) !Self {
                 runtime,
                 Core.CoreCtrl{ .main = vmode.m.main_ctrl },
                 try global_ctx.createVmLocal(),
-                profiler,
+                null,
             );
         },
     }
