@@ -38,3 +38,18 @@ jobs:
 
             - name: Build and test
               run: zig build test
+
+    test-thread-sanitizer:
+        runs-on: ubuntu-latest
+        needs: check-formatting
+
+        steps:
+            - uses: actions/checkout@v6
+
+            - name: Setup Zig
+              uses: mlugg/setup-zig@v2
+              with:
+                  version: 0.17.0
+
+            - name: Golden tests (single and multithread) with ThreadSanitizer
+              run: zig build golden-test -Dtsan=true
