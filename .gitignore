@@ -1,3 +1,6 @@
 .zig-cache/
 zig-out/
 zig-pkg/
+
+# OSX
+.DS_Store
