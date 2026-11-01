@@ -22,6 +22,9 @@ pub const GlobalCtx = struct {
     /// Heaps and fetcher are shared between cores - multithread needs locked ones.
     locked: bool,
 
+    /// The VM core gets the heaps and fetcher directly, so only one such ctx may exist.
+    vm_local_taken: bool = false,
+
     const FetcherType = EquationFetcher.ThreeDequeEquationFetcher;
     const LockedFetcherType = EquationFetcher.LockedEquationFetcher;
 
@@ -167,16 +170,12 @@ pub const GlobalCtx = struct {
         };
     }
 
-    pub fn createVmLocal(self: GlobalCtx) !Core.LocalCtx {
-        const S = struct {
-            var exist: bool = false;
-        };
-
-        if (S.exist) {
+    pub fn createVmLocal(self: *GlobalCtx) !Core.LocalCtx {
+        if (self.vm_local_taken) {
             return error.AccessDenied;
         }
 
-        S.exist = true;
+        self.vm_local_taken = true;
         return .{
             .agent_heap = self.agent_heap,
             .name_heap = self.name_heap,

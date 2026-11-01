@@ -17,6 +17,11 @@ pub const Agent = struct {
 };
 
 pub const Name = struct {
+    /// Tagged pointer to the value parked on the name:
+    ///   0          - empty, nothing parked yet
+    ///   ptr | 0b0  - *Agent
+    ///   ptr | 0b1  - *Name
+    /// Pointers are aligned, so the lowest bit is free to hold the tag.
     box: std.atomic.Value(usize),
     arrivals: if (count_arrivals) std.atomic.Value(u8) else void,
 
@@ -28,24 +33,24 @@ pub const Name = struct {
     const count_arrivals = Config.check_name_arrivals;
 
     const empty_box: usize = 0;
-    const name_tag: usize = 1;
+    const name_tag_bit: usize = 0b1;
 
     comptime {
-        std.debug.assert(@alignOf(Agent) > name_tag and @alignOf(Name) > name_tag);
+        std.debug.assert(@alignOf(Agent) > name_tag_bit and @alignOf(Name) > name_tag_bit);
         std.debug.assert(count_arrivals or @sizeOf(Name) == @sizeOf(usize));
     }
 
     fn encode(val: Value) usize {
         return switch (val) {
             .agent => |agent| @intFromPtr(agent),
-            .name => |name| @intFromPtr(name) | name_tag,
+            .name => |name| @intFromPtr(name) | name_tag_bit,
             .special => unreachable,
         };
     }
 
     fn decode(word: usize) ?Value {
         if (word == empty_box) return null;
-        if (word & name_tag != 0) return .{ .name = @ptrFromInt(word & ~name_tag) };
+        if (word & name_tag_bit != 0) return .{ .name = @ptrFromInt(word & ~name_tag_bit) };
         return .{ .agent = @ptrFromInt(word) };
     }
 

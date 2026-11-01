@@ -4,8 +4,6 @@ An **`Agent`** is a node of the interaction net. A **`Name`** is a wire. A wire 
 by its two ends, so a Name works as a small mailbox: the first end to arrive leaves a
 value, the second end takes it.
 
-How rules create and connect these is in [RULES.md](RULES.md).
-
 ## 1. Agents
 
 An agent has one principal port and `arity` aux ports. When two principal ports meet,
@@ -16,8 +14,10 @@ Agent = { id, ports: [10]?Value }        // aux ports only
 Value = name: *Name | agent: *Agent | special
 ```
 
-There is no field for the principal port. A port that holds `.agent = A` is wired to
-A's principal port, so a term like `Add(r, S(Z()))` is a tree of pointers:
+There is no field for the principal port; its connection is implied by whoever holds the pointer to the agent.
+A port that holds `.agent = A` is wired to A's principal port; a name whose box holds A has A's principal port
+on one of its ends; and two agents connected by their principal ports form an active pair, which lives only
+in the equation fetcher as `Equation{ .lhs, .rhs }`
 
 ```
   Add(r, S(Z()))
