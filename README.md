@@ -1,4 +1,16 @@
-# bancai
+<h1 align="center">
+  <picture>
+    <img src="docs/assets/bancai-banner.svg" alt="bancai" width="720">
+  </picture>
+</h1>
+
+<p align="center"><em>Parallel interaction nets interpreter in Zig</em></p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/zig-0.17-f7a41d?logo=zig&logoColor=white" alt="Zig 0.17">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-e8290f" alt="MIT license"></a>
+  <img src="https://img.shields.io/badge/status-early%20development-ff6a12" alt="Status: early development">
+</p>
 
 Bancai is a (not yet) parallel interaction nets interpreter, inspired by [Inpla](https://github.com/inpla/inpla). The language is Inpla's dialect.
 
@@ -16,9 +28,32 @@ $ zig build run -- -f ./tests/list_sorting.in
 
 Note that this will compile in debug mode. For release mode use `-Doptimize=ReleaseFast`.
 
+## Example
+
+Sum a list with two rules:
+
+```
+Sum(r, acc) >< Cons(x, xs) =>
+    Add(acc', acc) ~ x,
+    Sum(r, acc') ~ xs;
+
+Sum(r, acc) >< Nil() =>
+    r ~ acc;
+
+Sum(r, 0) ~ [1, 2, 3, 4];
+r; free r;
+```
+
+```
+$ zig build run -- -f sum.in
+10
+```
+
+More examples live in `tests/`.
+
 ## Quick reference
 
-You can read a basic user manual at `docs/LANGUAGE.md`.
+You can read a basic user manual at [`docs/LANGUAGE.md`](docs/LANGUAGE.md).
 
 ## Current state
 
