@@ -201,6 +201,13 @@ pub fn BasicHeap(comptime T: type) type {
         fn freeOne(ctx: *anyopaque, elem: *T) void {
             const self: *Self = @ptrCast(@alignCast(ctx));
 
+            if (T == Agent) {
+                elem.rc -= 1;
+                if (elem.rc != 0) {
+                    return;
+                }
+            }
+
             const real_elem: *Optional = @fieldParentPtr("item", elem);
 
             if (Config.debug_printing.print_frees and real_elem.* == .free) {
