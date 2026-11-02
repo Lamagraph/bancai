@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/status-early%20development-ff6a12" alt="Status: early development">
 </p>
 
-Bancai is a (not yet) parallel interaction nets interpreter, inspired by [Inpla](https://github.com/inpla/inpla). The language is Inpla's dialect.
+Bancai is a parallel interaction nets interpreter, inspired by [Inpla](https://github.com/inpla/inpla). The language is Inpla's dialect.
 
 Interaction nets is a computational model with some restrictions, that allow for trivial parallelism.
 
@@ -57,7 +57,20 @@ You can read a basic user manual at [`docs/LANGUAGE.md`](docs/LANGUAGE.md).
 
 ## Current state
 
-Bancai is in early development. Single-threaded evaluation of interaction nets, based on Inpla model, is fully implemented. Parallel execution is in active development.
+Bancai is in early development. Single-threaded evaluation of interaction nets, based on Inpla model, is fully implemented. A minimal version of parallel execution is implemented: run with `-t N` to use `N` threads. Build with `-Dprint-core-stats` to see how interactions are distributed between cores:
+
+```
+$ zig build -Dprint-core-stats
+$ ./zig-out/bin/bancai -f ./tests/list_sorting.in -t 4
+Cons(1, Cons(22, Cons(13, Cons(11, Cons(2, Cons(22, Cons(4, Cons(1, Cons(0, Nil())))))))))
+Cons(0, Cons(1, Cons(1, Cons(2, Cons(4, Cons(11, Cons(13, Cons(22, Cons(22, Nil())))))))))
+core-main: 0 interactions (0.0%)
+core-0: 21 interactions (19.8%)
+core-1: 49 interactions (46.2%)
+core-2: 21 interactions (19.8%)
+core-3: 15 interactions (14.2%)
+total: 106 interactions
+```
 
 # Acknowledgement & Lineage
 
