@@ -1,2 +1,0 @@
-Cons(1, Cons(22, Cons(13, Cons(11, Cons(2, Cons(22, Cons(4, Cons(1, Cons(0, Nil())))))))))
-Cons(0, Cons(1, Cons(1, Cons(2, Cons(4, Cons(11, Cons(13, Cons(22, Cons(22, Nil())))))))))

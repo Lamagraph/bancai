@@ -18,9 +18,14 @@ const Compilation = @import("compilation");
 const Instruction = Compilation.Instruction;
 const Condition = Compilation.Condition;
 
-const CoreMasterCtrl = @import("core_master_ctrl.zig");
-const CoreSlaveCtrl = @import("core_slave_ctrl.zig");
-const Normalize = @import("normalize.zig");
+const MainCtrl = @import("mt/main_ctrl.zig");
+const WorkerCtrl = @import("mt/worker_ctrl.zig");
+const Link = @import("link.zig");
+
+const CoreMode = @import("core_types.zig").CoreMode;
+const CoreId = @import("core_types.zig").CoreId;
+const CoreRc = @import("core_types.zig").CoreRc;
+const CoreRole = @import("core_types.zig").CoreRole;
 
 const Agent = Types.Agent;
 const Value = Types.Value;
@@ -30,6 +35,8 @@ const EquationUnnormalized = Types.EquationUnnormalized;
 
 const Core = @This();
 const Self = Core;
+
+const log = std.log.scoped(.core);
 
 const number_of_registers = 256;
 
@@ -41,33 +48,24 @@ mode: CoreMode,
 // VM's statement handling now, so this can be const.
 runtime: *const Runtime,
 
-profiler: *Profiler,
+/// Null in multithread mode: profiling is supported only single-threaded.
+profiler: ?*Profiler,
 
 core_ctrl: ?CoreCtrl,
 local_ctx: LocalCtx,
+interactions: u64 = 0,
 
 registers: [number_of_registers]Value,
 condition_registers: [number_of_registers]Condition.Register.CondValue,
 
-pub const CoreMode = enum { singleThread, multiThread };
-pub const CoreRole = enum { master, slave };
-
-pub const CoreRc = enum(u8) {
-    /// The core finished execution normally.
-    finishRc = 0,
-    /// The core was stopped for some reason.
-    stopRc,
-};
-
-pub const CoreId = union(CoreRole) {
-    master: void,
-    slave: u32,
-};
-
 pub const CoreCtrl = union(CoreRole) {
-    master: *CoreMasterCtrl,
-    slave: *CoreSlaveCtrl,
+    main: *MainCtrl,
+    worker: *WorkerCtrl,
 };
+
+inline fn workerCtrl(self: *Self) *WorkerCtrl {
+    return self.core_ctrl.?.worker;
+}
 
 /// Per-core state - the heap and fetcher a given Core exclusively works
 /// with, as opposed to CoreCommon which every Core shares.
@@ -97,11 +95,11 @@ pub const LocalCtx = struct {
     }
 
     pub inline fn pushEquation(self: *LocalCtx, eq: EquationUnnormalized) !void {
-        try Normalize.pushEquation(self.name_heap, self.equation_fetcher, eq);
+        try Link.pushEquation(self.name_heap, self.equation_fetcher, eq);
     }
 
     pub inline fn pushUrgent(self: *LocalCtx, eq: EquationUnnormalized) !void {
-        try Normalize.pushUrgentEquation(self.name_heap, self.equation_fetcher, eq);
+        try Link.pushUrgentEquation(self.name_heap, self.equation_fetcher, eq);
     }
 
     /// This function will always be called in the context of two agents interacting.
@@ -113,7 +111,7 @@ pub const LocalCtx = struct {
 
 pub fn createEmptyName(c: *Core) !*Name {
     const name = try c.local_ctx.allocOneName();
-    name.port = null;
+    name.* = .empty;
     return name;
 }
 
@@ -139,7 +137,7 @@ pub fn init(
     runtime: *const Runtime,
     core_ctrl: ?CoreCtrl,
     local_ctx: LocalCtx,
-    profiler: *Profiler,
+    profiler: ?*Profiler,
 ) Self {
     return .{
         .id = core_id,
@@ -184,7 +182,7 @@ pub fn execInstructions(
             },
             .mk_name => {
                 const name = try c.local_ctx.allocOneName();
-                name.* = .{ .port = null };
+                name.* = .empty;
                 c.registers[instruction.operand1] = .{ .name = name };
             },
             .load_arguments => {
@@ -209,38 +207,84 @@ pub fn execInstructions(
     }
 }
 
-inline fn runEquationsSingleThread(c: *Core) !CoreRc {
+inline fn evalAsSingleThread(c: *Core) !void {
+    // NOTE:(kogora) dont use CoreCtrl at all
     while (c.local_ctx.fetchEquation()) |eq| {
         try Interaction.evalEquation(c, eq);
     }
-
-    return .finishRc;
 }
 
-inline fn runEquationsMaster(c: *Core) !CoreRc {
-    // TODO:(kogora) add core_ctrl usage (as CoreMasterCtrl)
+inline fn evalAsMain(c: *Core) !void {
+    // TODO:(kogora) add core_ctrl usage (as MainCtrl)
     while (c.local_ctx.fetchEquation()) |eq| {
         try Interaction.evalEquation(c, eq);
     }
-
-    return .finishRc;
 }
 
-inline fn runEquationsSlave(c: *Core) !CoreRc {
-    // TODO:(kogora) add core_ctrl usage (as CoreSlaveCtrl)
-    while (c.local_ctx.fetchEquation()) |eq| {
-        try Interaction.evalEquation(c, eq);
+inline fn evalAsWorker(c: *Core) !void {
+    const ctrl = c.workerCtrl();
+
+    { // Init work (newborn -> applicant)
+        const new_state = ctrl.getStatePriv().applicantState();
+        ctrl.putState(new_state);
+    }
+    defer { // Deinit work (goner -> corpse)
+        const new_state = ctrl.getStatePriv().corpseState();
+        ctrl.putState(new_state);
     }
 
-    return .finishRc;
+    live: while (true) {
+        var cur_state = ctrl.getStatePriv();
+
+        if (cur_state != .goner) {
+            if (ctrl.receiveSig()) |sig| {
+                cur_state = cur_state.sigNextState(sig) orelse cur_state;
+
+                // Must precede ackSig: the VM relies on it.
+                ctrl.putState(cur_state);
+                ctrl.ackSig();
+            }
+        }
+
+        switch (cur_state) {
+            .busy => {
+                var new_state: WorkerCtrl.State = undefined;
+
+                eval: {
+                    const eq = c.local_ctx.fetchEquation() orelse {
+                        new_state = cur_state.applicantState();
+                        break :eval;
+                    };
+
+                    Interaction.evalEquation(c, eq) catch |err| {
+                        log.err("core-{}: {s}", .{ c.id.worker, @errorName(err) });
+                        new_state = cur_state.gonerState();
+                        break :eval;
+                    };
+
+                    continue :live;
+                }
+
+                ctrl.putState(new_state);
+            },
+            .applicant => {
+                std.atomic.spinLoopHint();
+            },
+            .goner => {
+                log.debug("core-{} is a goner", .{c.id.worker});
+                break :live;
+            },
+            .corpse, .newborn => unreachable,
+        }
+    }
 }
 
-pub fn runEquations(c: *Core) !CoreRc {
+pub fn eval(c: *Core) !void {
     return switch (c.mode) {
-        .singleThread => try runEquationsSingleThread(c),
+        .singleThread => try evalAsSingleThread(c),
         .multiThread => switch (c.id) {
-            .master => try runEquationsMaster(c),
-            .slave => try runEquationsSlave(c),
+            .main => try evalAsMain(c),
+            .worker => try evalAsWorker(c),
         },
     };
 }
