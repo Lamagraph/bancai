@@ -193,6 +193,12 @@ pub const Value = union(enum) {
         };
     }
 
+    /// Returns what is on the other end of the wire `val`, without arriving at it:
+    /// follows full boxes, freeing each Name on the way (its other end already left),
+    /// and stops at an agent/special or at the first Name with an EMPTY box.
+    ///   [ x ] --> [ y ] --> S        returns S, frees x and y
+    ///   [ x ] --> [ y ] --> EMPTY    returns y, frees x
+    /// Never writes a box, so the other end can still arrive at the returned Name.
     pub fn resolve(val: Value, heap: memory.Heap(Name)) Value {
         var cur = val;
         while (cur == .name) {

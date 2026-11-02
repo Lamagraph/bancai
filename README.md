@@ -23,7 +23,7 @@ Install zig compiler v0.17, then it's simple:
 ```
 $ zig build
 $ zig build test
-$ zig build run -- -f ./tests/list_sorting.in
+$ zig build run -- -f ./tests/sorting.in
 ```
 
 Note that this will compile in debug mode. For release mode use `-Doptimize=ReleaseFast`.
@@ -61,15 +61,14 @@ Bancai is in early development. Single-threaded evaluation of interaction nets, 
 
 ```
 $ zig build -Dprint-core-stats
-$ ./zig-out/bin/bancai -f ./tests/list_sorting.in -t 4
-Cons(1, Cons(22, Cons(13, Cons(11, Cons(2, Cons(22, Cons(4, Cons(1, Cons(0, Nil())))))))))
-Cons(0, Cons(1, Cons(1, Cons(2, Cons(4, Cons(11, Cons(13, Cons(22, Cons(22, Nil())))))))))
+$ ./zig-out/bin/bancai -f ./tests/sorting.in -t 4
+Cons(1, Cons(2, Cons(3, Cons(4, Cons(5, Cons(6, Cons(7, Cons(8, Cons(9, Cons(10, Cons(11, Cons(12, Cons(13, Cons(14, Cons(15, Cons(16, Cons(17, Cons(18, Cons(19, Cons(20, Cons(21, Cons(22, Cons(23, Cons(24, Cons(25, Cons(26, Cons(27, Cons(28, Cons(29, Cons(30, Nil()))))))))))))))))))))))))))))))
 core-main: 0 interactions (0.0%)
-core-0: 21 interactions (19.8%)
-core-1: 49 interactions (46.2%)
-core-2: 21 interactions (19.8%)
-core-3: 15 interactions (14.2%)
-total: 106 interactions
+core-0: 116 interactions (25.2%)
+core-1: 122 interactions (26.5%)
+core-2: 113 interactions (24.6%)
+core-3: 109 interactions (23.7%)
+total: 460 interactions
 ```
 
 # Acknowledgement & Lineage
