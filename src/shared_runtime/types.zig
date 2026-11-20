@@ -3,7 +3,7 @@ const std = @import("std");
 
 const memory = @import("memory.zig");
 
-const number_of_ports = 10;
+pub const number_of_ports = 10;
 
 pub const Ports = [number_of_ports]Value;
 

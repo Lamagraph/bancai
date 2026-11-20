@@ -1,7 +1,8 @@
 //! Builtin agents logic.
 const std = @import("std");
 const Core = @import("core.zig");
-const Types = @import("shared_runtime").Types;
+const Runtime = @import("shared_runtime");
+const Types = Runtime.Types;
 const AST = @import("ast");
 
 const Agent = Types.Agent;
@@ -58,16 +59,22 @@ pub const number_builtin_ident = AST.number_special_ident;
 const dups = init: {
     const ref_max_arity = 4;
     const copy_max_arity = 4;
-    const default_impl = dupCopy;
+    const inpla_max_arity = 4;
+    const default_impl = dupInpla;
     const default_arity = 2;
     const default_max_arity = 4;
 
     const default_name = "Dup";
     const ref_name = "DupRef";
     const copy_name = "DupCopy";
+    const inpla_name = "DupInpla";
 
     // + 1 because default_arity..max_arity is end inclusive. + 1 for arityless name
-    const dup_cnt = (ref_max_arity - default_arity + 1 + 1) + (copy_max_arity - default_arity + 1 + 1) + (default_max_arity - default_arity + 1 + 1);
+    const dup_cnt =
+        (ref_max_arity - default_arity + 1 + 1) +
+        (copy_max_arity - default_arity + 1 + 1) +
+        (default_max_arity - default_arity + 1 + 1) +
+        (inpla_max_arity - default_arity + 1 + 1);
 
     var lst: [dup_cnt]BuiltinAgent = undefined;
 
@@ -79,6 +86,8 @@ const dups = init: {
         lst[item_idx] = .{ .name = std.fmt.comptimePrint("{s}", .{ref_name}), .arity = default_arity, .impl = dupReference };
         item_idx += 1;
         lst[item_idx] = .{ .name = std.fmt.comptimePrint("{s}", .{copy_name}), .arity = default_arity, .impl = dupCopy };
+        item_idx += 1;
+        lst[item_idx] = .{ .name = std.fmt.comptimePrint("{s}", .{inpla_name}), .arity = default_arity, .impl = dupInpla };
         item_idx += 1;
     }
 
@@ -97,16 +106,17 @@ const dups = init: {
         item_idx += 1;
     }
 
+    for (default_arity..inpla_max_arity + 1) |arity_idx| {
+        lst[item_idx] = .{ .name = std.fmt.comptimePrint("{s}{}", .{ inpla_name, arity_idx }), .arity = arity_idx, .impl = dupInpla };
+        item_idx += 1;
+    }
+
     std.debug.assert(item_idx == dup_cnt);
 
     break :init lst;
 };
 
-// Making this empty makes there be no
-// builtin agents. TODO: use compile flag for that
-//
-// Maybe make the "Abc0" , ... , "Abc10" agents be placed here at compile time
-pub const builtin_agents = [_]BuiltinAgent{
+const predefined = [_]BuiltinAgent{
     .{ .name = "Exiter", .arity = 0, .impl = exiter },
 
     .{ .name = "Eraser", .arity = 0, .impl = eraser },
@@ -136,7 +146,13 @@ pub const builtin_agents = [_]BuiltinAgent{
     .{ .name = "Cons", .arity = 2, .impl = unbuiltin },
     .{ .name = "Nil", .arity = 0, .impl = unbuiltin },
     .{ .name = "MakeRandomList", .arity = 1, .impl = make_random_list },
-} ++ dups;
+};
+
+pub fn isDuplicator(id: Agent.Id) bool {
+    return id >= predefined.len and id < (predefined.len + dups.len);
+}
+
+pub const builtin_agents = predefined ++ dups;
 
 // Add more builtin agents logic here
 
@@ -404,6 +420,138 @@ pub fn dupReference(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!voi
             .rhs = .{ .agent = other },
         };
         try c.local_ctx.pushEquation(eq);
+    }
+}
+
+pub fn delta_delta(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!void {
+    if (c.runtime.agent_arities.arityOf(self.id) == c.runtime.agent_arities.arityOf(other.id))
+        return tuple(c, self, other)
+    else
+        return BuiltinAgentError.BadSecondaryArgument;
+}
+
+inline fn nonNull(comptime T: type, f: anytype, args: anytype, generic_null: T) ?T {
+    const val: T = @call(.auto, f, args);
+    return if (val == generic_null) null else val;
+}
+
+fn getDupWeaker(arity: Agent.Arity, id: Agent.Id) ?Agent.Id {
+    return if (arity == 2) null else id - 1;
+}
+
+/// A variant semantically identical to inpla version of duplicators. That is, it is a left-eager duplicator:
+/// it walks on the left-most ports of an agent tree, leaving a duplicator on the remaining ports.
+pub fn dupInpla(c: *Core, self: *Agent, _other: *Agent) BuiltinAgentError!void {
+    if (isDuplicator(_other.id)) {
+        return delta_delta(c, self, _other);
+    }
+    defer c.local_ctx.freeOneAgent(self);
+
+    const dup_arity = c.runtime.agent_arities.arityOf(self.id);
+
+    var other = _other;
+
+    var lookat: [Types.number_of_ports]*Agent = undefined;
+
+    const FallbackArray = union(enum) {
+        no_fallback,
+        fallback: [Types.number_of_ports]*Agent,
+    };
+
+    var fallbacks: FallbackArray = .no_fallback;
+
+    while (nonNull(Agent.Arity, Runtime.ArityMap.arityOf, .{ &c.runtime.agent_arities, other.id }, 0)) |arity| {
+        lookat[0] = other;
+        for (1..dup_arity) |dup_idx| {
+            const previous = if (fallbacks == .fallback) lookat[dup_idx] else null;
+            lookat[dup_idx] = try c.createAgent(other.id);
+            if (previous) |agent| {
+                agent.ports[0] = .{ .agent = lookat[dup_idx] };
+            }
+        }
+
+        for (1..arity) |port_idx| {
+            const dup = try c.createAgent(self.id);
+
+            const eq = EquationUnnormalized{
+                .lhs = .{ .agent = dup },
+                .rhs = other.ports[port_idx],
+            };
+            try c.local_ctx.pushEquation(eq);
+
+            for (0..dup_arity) |dup_idx| {
+                lookat[dup_idx].ports[port_idx] = .{ .name = try c.createEmptyName() };
+                dup.ports[dup_idx] = lookat[dup_idx].ports[port_idx];
+            }
+        }
+
+        if (fallbacks == .no_fallback) {
+            fallbacks = .{ .fallback = undefined };
+            @memcpy(fallbacks.fallback[0..dup_arity], lookat[0..dup_arity]);
+        }
+
+        const possible_new_other = other.ports[0];
+        new_other_switch: switch (possible_new_other) {
+            .agent => |new_other| {
+                other = new_other;
+            },
+            .name => |name| {
+                if (name.port) |port| {
+                    continue :new_other_switch port;
+                } else {
+                    const dup = try c.createAgent(self.id);
+
+                    name.port = .{ .agent = dup };
+
+                    for (0..dup_arity) |dup_idx| {
+                        dup.ports[dup_idx] = .{ .name = try c.createEmptyName() };
+                        lookat[dup_idx].ports[0] = dup.ports[dup_idx];
+                    }
+                    break;
+                }
+            },
+            .special => |special| {
+                for (0..dup_arity) |dup_idx|
+                    lookat[dup_idx].ports[0] = .{ .special = special };
+                break;
+            },
+        }
+
+        if (isDuplicator(other.id)) {
+            const dup = try c.createAgent(self.id);
+            const eq = Types.Equation{
+                .lhs = dup,
+                .rhs = other,
+            };
+            try c.local_ctx.equation_fetcher.push(eq);
+            const previous = fallbacks.fallback;
+            for (0..dup_arity) |dup_idx| {
+                const name = try c.createEmptyName();
+                previous[dup_idx].ports[0] = .{ .name = name };
+                dup.ports[dup_idx] = .{ .name = name };
+            }
+            break;
+        }
+    } else {
+        lookat[0] = other;
+        for (1..dup_arity) |dup_idx| {
+            const previous = if (fallbacks == .fallback) lookat[dup_idx] else null;
+            lookat[dup_idx] = try c.createAgent(other.id);
+            if (previous) |agent| {
+                agent.ports[0] = .{ .agent = lookat[dup_idx] };
+            }
+        }
+    }
+
+    const roots = switch (fallbacks) {
+        .no_fallback => lookat[0..dup_arity],
+        .fallback => |*fallback| fallback[0..dup_arity],
+    };
+    for (roots, 0..) |root, idx| {
+        try c.local_ctx.pushEquation(.{
+            .lhs = self.ports[idx],
+            .rhs = .{ .agent = root },
+        });
     }
 }
 
