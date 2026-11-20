@@ -60,7 +60,7 @@ const dups = init: {
     const ref_max_arity = 4;
     const copy_max_arity = 4;
     const inpla_max_arity = 4;
-    const default_impl = dupInpla;
+    const default_impl = dupCopy;
     const default_arity = 2;
     const default_max_arity = 4;
 
@@ -423,11 +423,65 @@ pub fn dupReference(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!voi
     }
 }
 
-pub fn delta_delta(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!void {
-    if (c.runtime.agent_arities.arityOf(self.id) == c.runtime.agent_arities.arityOf(other.id))
-        return tuple(c, self, other)
-    else
-        return BuiltinAgentError.BadSecondaryArgument;
+/// Clasisical interactions nets Delta~Delta agents interactions. It also needs to handle the case where
+/// deltas have different arities, which has the semantic as if every delta was rewritten using Delta2.
+pub fn delta_delta(c: *Core, _self: *Agent, _other: *Agent) BuiltinAgentError!void {
+    var lagent = _self;
+    var ragent = _other;
+
+    const larity = c.runtime.agent_arities.arityOf(lagent.id);
+    const rarity = c.runtime.agent_arities.arityOf(ragent.id);
+
+    if (larity == rarity) {
+        defer {
+            c.local_ctx.freeOneAgent(lagent);
+            c.local_ctx.freeOneAgent(ragent);
+        }
+        const arity = larity;
+
+        for (0..arity) |port_idx| {
+            const eq = EquationUnnormalized{
+                .lhs = lagent.ports[port_idx],
+                .rhs = ragent.ports[port_idx],
+            };
+
+            try c.local_ctx.pushEquation(eq);
+        }
+    } else {
+        if (rarity < larity) {
+            std.mem.swap(*Agent, &lagent, &ragent);
+        }
+        // larity < rarity
+
+        const low_arity = larity;
+        const high_arity = rarity;
+
+        const weakness = high_arity - low_arity;
+        for (1..larity) |port_idx| {
+            const eq = EquationUnnormalized{
+                .lhs = lagent.ports[port_idx],
+                .rhs = ragent.ports[port_idx + weakness],
+            };
+
+            try c.local_ctx.pushEquation(eq);
+        }
+        const weaker_dup = try c.createAgent(getDupWeaker(rarity, ragent.id, weakness).?);
+
+        for (0..weakness) |port_idx| {
+            const eq = EquationUnnormalized{
+                .lhs = ragent.ports[port_idx],
+                .rhs = weaker_dup.ports[port_idx],
+            };
+
+            try c.local_ctx.pushEquation(eq);
+        }
+
+        const weakness_eq = EquationUnnormalized{
+            .lhs = .{ .agent = weaker_dup },
+            .rhs = lagent.ports[0],
+        };
+        try c.local_ctx.pushEquation(weakness_eq);
+    }
 }
 
 inline fn nonNull(comptime T: type, f: anytype, args: anytype, generic_null: T) ?T {
@@ -435,8 +489,8 @@ inline fn nonNull(comptime T: type, f: anytype, args: anytype, generic_null: T) 
     return if (val == generic_null) null else val;
 }
 
-fn getDupWeaker(arity: Agent.Arity, id: Agent.Id) ?Agent.Id {
-    return if (arity == 2) null else id - 1;
+fn getDupWeaker(arity: Agent.Arity, id: Agent.Id, weakness: Agent.Arity) ?Agent.Id {
+    return if (arity - weakness < 2) null else id - weakness;
 }
 
 /// A variant semantically identical to inpla version of duplicators. That is, it is a left-eager duplicator:

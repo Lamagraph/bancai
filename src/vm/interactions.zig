@@ -47,7 +47,7 @@ fn evalCondition(c: *Core, lagent: *Agent, ragent: *Agent, instructions: []Condi
                             if (traversed) |agent| {
                                 break :agent agent;
                             } else {
-                                std.debug.print("No value on name\n", .{});
+                                // std.debug.print("No value on name\n", .{});
                                 return EvaluationError.EmptyName;
                             }
                         },
