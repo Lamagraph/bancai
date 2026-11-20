@@ -60,7 +60,7 @@ const dups = init: {
     const ref_max_arity = 4;
     const copy_max_arity = 4;
     const inpla_max_arity = 4;
-    const default_impl = dupCopy;
+    const default_impl = dupReference;
     const default_arity = 2;
     const default_max_arity = 4;
 
@@ -347,13 +347,32 @@ pub fn dupCopy(c: *Core, self: *Agent, ag: *Agent) BuiltinAgentError!void {
 }
 
 pub const reference_duplicator = struct {
+    fn createDup(c: *Core, agent: *Agent, copy: *Agent, port_idx: usize) !void {
+        const dup_id = comptime BuiltinNameMap.get("DupCopy2").?;
+        const dup = try c.createAgent(dup_id);
+
+        const orig_port_name = try c.createEmptyName();
+        const copy_port_name = try c.createEmptyName();
+
+        dup.ports[0] = .{ .name = orig_port_name };
+        dup.ports[1] = .{ .name = copy_port_name };
+
+        const eq = EquationUnnormalized{
+            .lhs = agent.ports[port_idx],
+            .rhs = .{ .agent = dup },
+        };
+        try c.local_ctx.pushEquation(eq);
+
+        agent.ports[port_idx] = .{ .name = orig_port_name };
+        copy.ports[port_idx] = .{ .name = copy_port_name };
+    }
+
     /// Copy on write. We copy the agent. After that, all its
     /// ports are looked at by two agents (the original and the copy).
     /// If the original has an empty port, then it is a nested pattern matching
     /// problem.
     pub fn cow(c: *Core, agent: *Agent) !*Agent {
         std.debug.assert(agent.rc > 1);
-        const dup_copy_id = comptime BuiltinNameMap.get("DupCopy2").?;
         const arity = c.runtime.agent_arities.arityOf(agent.id);
 
         agent.rc -= 1;
@@ -365,23 +384,19 @@ pub const reference_duplicator = struct {
                 break;
             }
 
-            const possible_agent = agent.ports[port_idx].getAgent();
-            if (possible_agent) |port_agent| {
+            agent.ports[port_idx].traverse(c.local_ctx.name_heap);
+            // is now empty name or an agent
+            if (agent.ports[port_idx] == .agent) {
+                const port_agent = agent.ports[port_idx].agent;
+                if (isDuplicator(port_agent.id)) {
+                    try createDup(c, agent, new_me, port_idx);
+                    continue;
+                }
                 port_agent.rc += 1;
                 new_me.ports[port_idx] = .{ .agent = port_agent };
             } else {
                 @branchHint(.cold);
-                const name = agent.ports[port_idx].name.traverseFree(c.local_ctx.name_heap);
-                // Meaning, Tuple2(w, f(w)) type of net is impossible to be used with DupRef
-                const dup_copy = try c.createAgent(dup_copy_id);
-                name.port = .{ .agent = dup_copy };
-
-                const orig_port_name = try c.createEmptyName();
-                const copy_port_name = try c.createEmptyName();
-                dup_copy.ports[0] = .{ .name = orig_port_name };
-                dup_copy.ports[1] = .{ .name = copy_port_name };
-                agent.ports[port_idx] = .{ .name = orig_port_name };
-                new_me.ports[port_idx] = .{ .name = copy_port_name };
+                try createDup(c, agent, new_me, port_idx);
             }
         }
 
@@ -390,6 +405,10 @@ pub const reference_duplicator = struct {
 };
 
 pub fn dupReference(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!void {
+    if (isDuplicator(other.id)) {
+        return delta_delta(c, self, other);
+    }
+
     defer c.local_ctx.freeOneAgent(self);
     const dup_arity = c.runtime.agent_arities.arityOf(self.id);
     other.rc += dup_arity - 1;
@@ -408,14 +427,14 @@ pub fn delta_delta(c: *Core, _self: *Agent, _other: *Agent) BuiltinAgentError!vo
     var lagent = _self;
     var ragent = _other;
 
-    const larity = c.runtime.agent_arities.arityOf(lagent.id);
-    const rarity = c.runtime.agent_arities.arityOf(ragent.id);
+    var larity = c.runtime.agent_arities.arityOf(lagent.id);
+    var rarity = c.runtime.agent_arities.arityOf(ragent.id);
 
+    defer {
+        c.local_ctx.freeOneAgent(lagent);
+        c.local_ctx.freeOneAgent(ragent);
+    }
     if (larity == rarity) {
-        defer {
-            c.local_ctx.freeOneAgent(lagent);
-            c.local_ctx.freeOneAgent(ragent);
-        }
         const arity = larity;
 
         for (0..arity) |port_idx| {
@@ -429,6 +448,7 @@ pub fn delta_delta(c: *Core, _self: *Agent, _other: *Agent) BuiltinAgentError!vo
     } else {
         if (rarity < larity) {
             std.mem.swap(*Agent, &lagent, &ragent);
+            std.mem.swap(Agent.Arity, &larity, &rarity);
         }
         // larity < rarity
 

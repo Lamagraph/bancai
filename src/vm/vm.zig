@@ -135,7 +135,11 @@ pub const GlobalCtx = struct {
         const agent_heap = try heapInit(Agent, config.heap_size, runtime.gpa);
         errdefer heapDeinit(Agent, agent_heap, runtime.gpa);
 
-        const name_heap = try heapInit(Name, config.heap_size, runtime.gpa);
+        const name_heap = try heapInit(
+            Name,
+            config.heap_size * (@sizeOf(Agent) / @sizeOf(Name) + (if (@sizeOf(Agent) % @sizeOf(Name) > 0) 1 else 0)),
+            runtime.gpa,
+        );
         errdefer heapDeinit(Name, name_heap, runtime.gpa);
 
         const equation_fetcher = try equationFetcherInit(runtime.gpa);

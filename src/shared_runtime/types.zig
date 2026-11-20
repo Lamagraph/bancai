@@ -183,6 +183,16 @@ pub const Value = union(enum) {
             else => unreachable,
         };
     }
+
+    pub fn traverse(val: *Value, heap: memory.Heap(Name)) void {
+        val.* = switch (val.*) {
+            .name => |name| blk: {
+                const traversed = name.traverseFree(heap);
+                break :blk if (traversed.port) |port| port else .{ .name = traversed };
+            },
+            else => val.*,
+        };
+    }
 };
 
 pub const EquationUnnormalized = struct {
