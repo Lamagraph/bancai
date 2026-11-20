@@ -216,46 +216,34 @@ const copying_duplicator = struct {
         c: *Core,
         duplicator_arity: Agent.Arity,
         duplicator_id: Agent.Id,
-        names_map: *std.AutoHashMap(*Name, DuplicatingName),
-        arena: std.mem.Allocator,
+        /// A link to the duplicator.
+        names_map: *std.ArrayList(*Agent),
+        /// As we traverse the subnet tree several time, the structure doesn't change and we meet
+        /// duplicators in the exact order as they were created, thus we can use a basic index.
+        dup_idx: u32,
+        gpa: std.mem.Allocator,
     };
 
-    pub const DuplicatingName = union(enum) {
-        /// A name appearing twice inside the same subnet:
-        /// (w, F(w))
-        inner: struct { next_name: ?*Name },
-        /// A name that connects two agents with their auxillary ports.
-        outer: struct {
-            original_port: *Value,
-            dup_agent: *Agent,
-        },
-    };
+    fn updateDuplicator(ctx: *CopyContext, port_idx: usize) !*Name {
+        const dup = ctx.names_map.items[ctx.dup_idx];
 
-    pub fn makeCopy(ctx: *const CopyContext, port_idx: usize, agent: *Agent) !*Agent {
+        const new_name = try ctx.c.createEmptyName();
+        dup.ports[port_idx] = .{ .name = new_name };
+        ctx.dup_idx += 1;
+        return new_name;
+    }
+
+    pub fn makeCopy(ctx: *CopyContext, port_idx: usize, agent: *Agent) !*Agent {
         const ag_copy = try ctx.c.createAgent(agent.id);
         const ag_arity = ctx.c.runtime.agent_arities.arityOf(agent.id);
         for (0..ag_arity) |idx| {
             const port = agent.ports[idx];
             switch (port) {
                 .name => |connected_name| {
-                    const stored_ptr = ctx.names_map.getPtr(connected_name).?;
-                    switch (stored_ptr.*) {
-                        .inner => |inner| {
-                            if (inner.next_name) |next_name| {
-                                stored_ptr.inner.next_name = null;
-                                ag_copy.ports[idx] = .{ .name = next_name };
-                            } else {
-                                const next_name = try ctx.c.createEmptyName();
-                                stored_ptr.inner.next_name = next_name;
-                                ag_copy.ports[idx] = .{ .name = next_name };
-                            }
-                        },
-                        .outer => |outer| {
-                            const name = try ctx.c.createEmptyName();
-                            ag_copy.ports[idx] = .{ .name = name };
-                            outer.dup_agent.ports[port_idx] = .{ .name = name };
-                        },
-                    }
+                    // The port is null.
+                    std.debug.assert(connected_name.port == null);
+
+                    ag_copy.ports[idx] = Value{ .name = try updateDuplicator(ctx, port_idx) };
                 },
                 .agent => |connected_agent| {
                     ag_copy.ports[idx] = Value{ .agent = try makeCopy(ctx, port_idx, connected_agent) };
@@ -267,6 +255,22 @@ const copying_duplicator = struct {
         }
         return ag_copy;
     }
+
+    fn createDuplicatorReference(ctx: *const CopyContext, val: Value) !*Name {
+        const new_name = try ctx.c.createEmptyName();
+        const dup = try ctx.c.createAgent(ctx.duplicator_id);
+        const eq = EquationUnnormalized{
+            .lhs = .{ .agent = dup },
+            .rhs = val,
+        };
+        // This equation is still uninitialized!!!
+        try ctx.c.local_ctx.pushEquation(eq);
+        try ctx.names_map.append(ctx.gpa, dup);
+        dup.ports[0] = .{ .name = new_name };
+
+        return new_name;
+    }
+
     pub fn copyNames(ctx: *const CopyContext, agent: *Agent) !*Agent {
         const ag_arity = ctx.c.runtime.agent_arities.arityOf(agent.id);
         for (0..ag_arity) |idx| {
@@ -280,28 +284,15 @@ const copying_duplicator = struct {
                         agent.ports[idx] = traversed_port;
                         continue :port_switch traversed_port;
                     } else {
-                        agent.ports[idx] = Value{ .name = traversed };
-                        if (ctx.names_map.getPtr(traversed)) |duplicating_name| {
-                            if (duplicating_name.* == .outer) {
-                                ctx.c.local_ctx.freeOneAgent(duplicating_name.outer.dup_agent);
-                            }
-                            duplicating_name.* = .{
-                                .inner = .{
-                                    .next_name = null,
-                                },
-                            };
-                        } else {
-                            try ctx.names_map.put(traversed, .{
-                                .outer = .{
-                                    .original_port = &agent.ports[idx],
-                                    .dup_agent = try ctx.c.createAgent(ctx.duplicator_id),
-                                },
-                            });
-                        }
+                        agent.ports[idx] = .{ .name = try createDuplicatorReference(ctx, .{ .name = traversed }) };
                     }
                 },
                 .agent => |connected_agent| {
-                    agent.ports[idx] = Value{ .agent = try copyNames(ctx, connected_agent) };
+                    agent.ports[idx] =
+                        if (isDuplicator(connected_agent.id))
+                            Value{ .name = try createDuplicatorReference(ctx, .{ .agent = connected_agent }) }
+                        else
+                            Value{ .agent = try copyNames(ctx, connected_agent) };
                 },
                 .special => {},
             }
@@ -310,60 +301,48 @@ const copying_duplicator = struct {
     }
 };
 
+/// We want to believe that whenever this is executing, the equation_fetcher is blocked. Otherwise,
+/// the equation queue may have uninitialized equations. See copying_duplicator.copyNames.
+/// However, we need to block it only when the names_map is nonempty.
 pub fn dupCopy(c: *Core, self: *Agent, ag: *Agent) BuiltinAgentError!void {
+    if (isDuplicator(ag.id)) {
+        return delta_delta(c, self, ag);
+    }
+
     defer c.local_ctx.freeOneAgent(self);
     // This allocates :(
 
-    var arena = std.heap.ArenaAllocator.init(c.runtime.gpa);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    const gpa = c.runtime.gpa;
 
     const arity = c.runtime.agent_arities.arityOf(self.id);
-    var names_map = std.AutoHashMap(*Name, copying_duplicator.DuplicatingName).init(allocator);
-    defer names_map.deinit();
+    var names_map: std.ArrayList(*Agent) = .empty;
+    defer names_map.deinit(gpa);
 
-    const ctx: copying_duplicator.CopyContext = .{
-        .arena = allocator,
+    var ctx: copying_duplicator.CopyContext = .{
         .c = c,
         .duplicator_arity = c.runtime.agent_arities.arityOf(self.id),
         .duplicator_id = self.id,
+        .dup_idx = undefined,
         .names_map = &names_map,
+        .gpa = gpa,
     };
 
     _ = try copying_duplicator.copyNames(&ctx, ag);
 
-    if (self.ports[0] == .name and self.ports[0].name.is_open()) {
-        self.ports[0].name.port = Value{ .agent = ag };
-    } else {
-        try c.local_ctx.pushUrgent(EquationUnnormalized{
-            .lhs = self.ports[0],
-            .rhs = Value{ .agent = ag },
-        });
-    }
+    try c.local_ctx.pushEquation(EquationUnnormalized{
+        .lhs = self.ports[0],
+        .rhs = Value{ .agent = ag },
+    });
 
     for (1..arity) |port_idx| {
+        ctx.dup_idx = 0;
         const port = self.ports[port_idx];
         const copy = try copying_duplicator.makeCopy(&ctx, port_idx, ag);
-        if (port == .name and port.name.is_open()) {
-            port.name.port = Value{ .agent = copy };
-        } else {
-            const eq = EquationUnnormalized{
-                .lhs = port,
-                .rhs = Value{ .agent = copy },
-            };
-            try c.local_ctx.pushUrgent(eq);
-        }
-    }
-
-    var it = names_map.iterator();
-
-    while (it.next()) |entry| {
-        const outer = if (entry.value_ptr.* == .outer) entry.value_ptr.outer else continue;
-        const self_name = entry.key_ptr.*;
-        const new_self_name = try c.createEmptyName();
-        outer.original_port.name = new_self_name;
-        self_name.port = .{ .agent = outer.dup_agent };
-        outer.dup_agent.ports[0] = .{ .name = new_self_name };
+        const eq = EquationUnnormalized{
+            .lhs = port,
+            .rhs = Value{ .agent = copy },
+        };
+        try c.local_ctx.pushEquation(eq);
     }
 }
 
