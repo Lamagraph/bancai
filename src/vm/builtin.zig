@@ -347,8 +347,18 @@ pub fn dupCopy(c: *Core, self: *Agent, ag: *Agent) BuiltinAgentError!void {
 }
 
 pub const reference_duplicator = struct {
+    fn dup_dup_resolution(c: *Core, agent: *Agent, copy: *Agent, port_idx: usize) void {
+        const dup = agent.ports[port_idx].agent;
+        const dup_arity = c.runtime.agent_arities.arityOf(dup.id);
+        std.debug.assert(dup_arity == 2);
+        defer c.local_ctx.freeOneAgent(dup);
+
+        agent.ports[port_idx] = dup.ports[0];
+        copy.ports[port_idx] = dup.ports[1];
+    }
+
     fn createDup(c: *Core, agent: *Agent, copy: *Agent, port_idx: usize) !void {
-        const dup_id = comptime BuiltinNameMap.get("DupCopy2").?;
+        const dup_id = comptime BuiltinNameMap.get("DupRef2").?;
         const dup = try c.createAgent(dup_id);
 
         const orig_port_name = try c.createEmptyName();
@@ -366,7 +376,6 @@ pub const reference_duplicator = struct {
         agent.ports[port_idx] = .{ .name = orig_port_name };
         copy.ports[port_idx] = .{ .name = copy_port_name };
     }
-
     /// Copy on write. We copy the agent. After that, all its
     /// ports are looked at by two agents (the original and the copy).
     /// If the original has an empty port, then it is a nested pattern matching
@@ -385,11 +394,10 @@ pub const reference_duplicator = struct {
             }
 
             agent.ports[port_idx].traverse(c.local_ctx.name_heap);
-            // is now empty name or an agent
             if (agent.ports[port_idx] == .agent) {
                 const port_agent = agent.ports[port_idx].agent;
                 if (isDuplicator(port_agent.id)) {
-                    try createDup(c, agent, new_me, port_idx);
+                    dup_dup_resolution(c, agent, new_me, port_idx);
                     continue;
                 }
                 port_agent.rc += 1;
@@ -408,7 +416,6 @@ pub fn dupReference(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!voi
     if (isDuplicator(other.id)) {
         return delta_delta(c, self, other);
     }
-
     defer c.local_ctx.freeOneAgent(self);
     const dup_arity = c.runtime.agent_arities.arityOf(self.id);
     other.rc += dup_arity - 1;
@@ -421,7 +428,7 @@ pub fn dupReference(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!voi
     }
 }
 
-/// Clasisical interactions nets Delta~Delta agents interactions. It also needs to handle the case where
+/// Classical interaction nets Delta~Delta agents interactions. It also needs to handle the case where
 /// deltas have different arities, which has the semantic as if every delta was rewritten using Delta2.
 pub fn delta_delta(c: *Core, _self: *Agent, _other: *Agent) BuiltinAgentError!void {
     var lagent = _self;
@@ -711,7 +718,7 @@ pub fn number(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!void {
         .lhs = other.ports[0],
         .rhs = .{ .agent = ret_ag },
     };
-    try c.local_ctx.pushUrgent(eq);
+    try c.local_ctx.pushEquation(eq);
 }
 
 pub fn make_random_list(c: *Core, self: *Agent, other: *Agent) BuiltinAgentError!void {

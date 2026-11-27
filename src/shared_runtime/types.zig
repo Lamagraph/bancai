@@ -188,7 +188,10 @@ pub const Value = union(enum) {
         val.* = switch (val.*) {
             .name => |name| blk: {
                 const traversed = name.traverseFree(heap);
-                break :blk if (traversed.port) |port| port else .{ .name = traversed };
+                break :blk if (traversed.port) |port| port_blk: {
+                    heap.freeOne(traversed);
+                    break :port_blk port;
+                } else .{ .name = traversed };
             },
             else => val.*,
         };
